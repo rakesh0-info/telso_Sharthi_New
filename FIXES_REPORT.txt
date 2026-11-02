@@ -1,0 +1,27 @@
+Database Model and Superadmin Endpoint Review
+
+FIXED
+- Removed malformed citation fragments from database model files that caused Python syntax errors.
+- Corrected the reciprocal school-admin relationship so an admin can be assigned to multiple schools and each school can have multiple admins.
+- Added the teacher-subject association used by teacher creation, assignment, and listing endpoints.
+- Added a database uniqueness constraint to prevent duplicate classroom-operator/class assignments.
+- Aligned named PostgreSQL enum types with the telso_sar schema used by the ORM tables.
+- Imported sqlalchemy.func for normalized duplicate checks used by superadmin endpoints.
+- Added request validation for duplicate chapter names within a subject and duplicate topic names within a chapter, preventing database constraint errors from becoming generic subject-update conflicts.
+
+REVIEW RESULTS
+- A static security review covered all 30 /api/super-admin operations. No exploitable vulnerabilities were identified.
+- The endpoints continue to require the super-admin role.
+
+NOT FIXED OR NOT VERIFIED
+- No live database migration or production database operation was run. Existing databases need the teacher_subjects table and the classroom-operator assignment uniqueness constraint applied. SQLAlchemy create_all can create missing tables but does not update existing tables or constraints.
+- Classes and subjects remain global catalogs, matching the current model and superadmin API behavior. They were not changed to school-owned records.
+- Live deployment configuration, database data compatibility, and runtime endpoint behavior against a real database were not verified.
+
+VALIDATION
+- Python compileall passed for the application and model modules.
+- SQLAlchemy mapper configuration and many-to-many relationship checks passed.
+- PostgreSQL DDL compiled for all 15 ORM tables.
+- FastAPI OpenAPI generation passed for all 30 superadmin operations.
+- Reproduced the subject-update conflict with duplicate chapter/topic payloads; both are now rejected by request validation, and valid chapter replacement succeeds against SQLite.
+- No automated test files were present in the repository.

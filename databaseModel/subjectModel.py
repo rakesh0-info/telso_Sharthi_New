@@ -1,26 +1,21 @@
-# databaseModel/subjectModel.py
-from sqlalchemy import Column, Integer, String, ForeignKey, Table
+from sqlalchemy import Column, ForeignKey, Integer, String, Table
 from sqlalchemy.orm import relationship
-from databaseCon import Base
 
-# Association table for Teacher <-> Subject (Many-to-Many)
-teacher_subjects = Table(
-    "teacher_subjects",
-    Base.metadata,
-    Column("teacher_id", Integer, ForeignKey("teacher.id", ondelete="CASCADE"), primary_key=True),
-    Column("subject_id", Integer, ForeignKey("subject.id", ondelete="CASCADE"), primary_key=True)
-)
+from databaseCon import Base
+from databaseModel.classModel import class_subjects, teacher_subjects
+
 
 class Subject(Base):
     __tablename__ = "subject"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String(100), nullable=False)
-    class_id = Column(Integer, ForeignKey("class.id", ondelete="CASCADE"), nullable=False)
-    section_id = Column(Integer, ForeignKey("class_section.id", ondelete="SET NULL"), nullable=True)
+    name = Column(String(100), nullable=False, unique=True)
 
-    # Relationships
-    class_obj = relationship("ClassModel", back_populates="subjects")
-    section_obj = relationship("ClassSection", back_populates="subjects")
-    chapters = relationship("Chapter", back_populates="subject", cascade="all, delete-orphan")
+    classes = relationship("ClassModel", secondary=class_subjects, back_populates="subjects")
     teachers = relationship("Teacher", secondary=teacher_subjects, back_populates="subjects")
+    chapters = relationship(
+        "Chapter",
+        back_populates="subject",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )

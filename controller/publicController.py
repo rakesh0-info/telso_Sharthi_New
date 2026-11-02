@@ -185,9 +185,6 @@ async def reset_pass(
     except Exception:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
 
-    # If verify_token returns a User object, decode token payload separately for scope check if needed,
-    # or ensure verify_token validates the scope. Here we validate scope via payload inspection:
-
     try:
         decoded_payload = jwt.decode(token, os.getenv("SECRET_KEY"), algorithms=[os.getenv("ALGORITHM", "HS256")])
         if decoded_payload.get("scope") != "forget_pass_token":

@@ -1,108 +1,91 @@
-
 from typing import Any
 
+from dotenv import load_dotenv
 from fastapi import Depends, HTTPException
+from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 from starlette import status
 
-from databaseModel.userModel import User
-from dotenv import load_dotenv
 from databaseCon import get_db
+from databaseModel.userModel import User
+from enums import ActivationStatus
 from jwts.jwt_config import ALGORITHM, SECRET_KEY
-from fastapi.security import OAuth2PasswordBearer
 
 load_dotenv()
 
-
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/public/api/v1/login")
 
-def get_current_user(
-    token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db)
-) -> User:
-    """
-    Extracts, decodes, and validates the JWT Bearer Token.
-    """
-    cred_exc = HTTPException(
+
+def _unauthorized() -> HTTPException:
+    return HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
+        detail="Could not validate credentials.",
         headers={"WWW-Authenticate": "Bearer"},
     )
 
+
+def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+) -> User:
     try:
-        payload = jwt.decode(
-            token,
-            SECRET_KEY,
-            algorithms=[ALGORITHM]
-        )
-        user_email: str | None = payload.get("sub")
-        token_type: str | None = payload.get("type")
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        subject = payload.get("sub")
+        token_type = payload.get("type")
+        expiration = payload.get("exp")
 
-        if not user_email or token_type != "access":
-            raise cred_exc
+        # Require an access token with a subject and exp. jwt.decode validates exp
+        # when present; requiring it here prevents non-expiring JWTs.
+        if (
+            not isinstance(subject, str)
+            or not subject.strip()
+            or token_type != "access"
+            or expiration is None
+        ):
+            raise _unauthorized()
 
-    except JWTError:
-        raise cred_exc
+    except (JWTError, TypeError, ValueError):
+        raise _unauthorized()
 
-    user = db.query(User).filter(User.email == user_email).first()
-
-    if not user:
-        raise cred_exc
-
+    user = db.query(User).filter(User.email == subject.strip().lower()).first()
+    if user is None:
+        raise _unauthorized()
     return user
 
 
 def get_authenticated_active_user(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ) -> User:
-    """
-    Ensures that the user has completed first-time
-    verification and is not using a temporary password.
-    """
-    # if not current_user.is_verified:
-    #     raise HTTPException(
-    #         status_code=status.HTTP_403_FORBIDDEN,
-    #         detail=(
-    #             "First-time verification incomplete. "
-    #             "Please verify OTP and update your temporary password."
-    #         )
-    #     )
+    activation = current_user.activation_status
+    activation_value = activation.value if hasattr(activation, "value") else str(activation)
 
+    if activation_value.lower() != ActivationStatus.ACTIVE.value.lower():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account is inactive. Contact the administrator.",
+        )
     return current_user
 
 
 def require_roles(*allowed_roles: Any):
-    """
-    Role verification dependency factory.
-    Supports Python Enum values and raw strings.
-    """
+    if not allowed_roles:
+        raise ValueError("require_roles must receive at least one allowed role.")
+
+    allowed_values = {
+        role.value if hasattr(role, "value") else str(role)
+        for role in allowed_roles
+    }
+
     def role_checker(
-        user: User = Depends(get_authenticated_active_user)
+        user: User = Depends(get_authenticated_active_user),
     ) -> User:
-        if user.role is None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access forbidden: User has no assigned role."
-            )
-
-        user_role = (
-            user.role.value
-            if hasattr(user.role, "value")
-            else str(user.role)
-        )
-
-        allowed_values = [
-            role.value if hasattr(role, "value") else str(role)
-            for role in allowed_roles
-        ]
-
+        user_role = user.role.value if hasattr(user.role, "value") else str(user.role)
         if user_role not in allowed_values:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access forbidden: Insufficient permissions."
+                detail="Access forbidden: insufficient permissions.",
             )
-
         return user
 
     return role_checker
