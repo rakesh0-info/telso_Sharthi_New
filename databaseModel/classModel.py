@@ -69,6 +69,7 @@ class ClassSection(Base):
     __tablename__ = "class_section"
     __table_args__ = (
         UniqueConstraint("class_id", "section_name", name="uq_class_section_name"),
+        UniqueConstraint("id", "class_id", name="uq_class_section_id_class"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)

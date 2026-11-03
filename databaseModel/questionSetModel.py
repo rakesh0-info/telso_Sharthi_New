@@ -100,12 +100,21 @@ class QuestionSet(Base):
             name="ck_question_set_duration",
         ),
         Index("ix_question_set_created_by", "created_by"),
+        Index("ix_question_set_school_id", "school_id"),
+        Index("ix_question_set_section_id", "section_id"),
         Index("ix_question_set_scheduled_at", "scheduled_at"),
+        UniqueConstraint("id", "class_id", name="uq_question_set_id_class"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(150), nullable=False)
+    school_id = Column(Integer, ForeignKey("school.id", ondelete="RESTRICT"), nullable=False)
     class_id = Column(Integer, ForeignKey("class.id", ondelete="RESTRICT"), nullable=False)
+    section_id = Column(
+        Integer,
+        ForeignKey("class_section.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
     subject_id = Column(Integer, ForeignKey("subject.id", ondelete="RESTRICT"), nullable=False)
     chapter_id = Column(Integer, ForeignKey("chapter.id", ondelete="RESTRICT"), nullable=False)
     topic_id = Column(Integer, ForeignKey("topic.id", ondelete="RESTRICT"), nullable=True)
@@ -122,7 +131,9 @@ class QuestionSet(Base):
     duration_minutes = Column(Integer, nullable=False)
     created_by = Column(Integer, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
 
+    school = relationship("School")
     class_obj = relationship("ClassModel")
+    section = relationship("ClassSection")
     subject = relationship("Subject")
     chapter = relationship("Chapter")
     topic = relationship("Topic")

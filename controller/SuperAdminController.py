@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Optional
 import secrets
 import string
@@ -14,13 +14,14 @@ from sqlalchemy.orm import Session, selectinload
 from databaseCon import get_db
 from databaseModel.userModel import User
 from databaseModel.schoolModel import School
-from databaseModel.classModel import ClassModel, ClassSection, school_classes
+from databaseModel.classModel import ClassModel, ClassSection, class_subjects, school_classes
 from databaseModel.teacherModel import Teacher
 from databaseModel.studentModel import Student
 from databaseModel.classroomOperatorModel import ClassroomOperator, ClassroomOperatorAssignment
 from databaseModel.subjectModel import Subject
 from databaseModel.chapterModel import Chapter, Topic
 from databaseModel.questionSetModel import QuestionSet
+from databaseModel.teacherLessonModel import TeacherLessonContent, TeacherLessonShare
 from enums import RoleEnum, ActivationStatus, GenderEnum
 from util_validate.password_security import hash_password
 from jwts.DB_Security_Config import require_roles
@@ -54,6 +55,12 @@ def _validate_unique_ids(values: list[int]) -> list[int]:
     if len(values) != len(set(values)):
         raise ValueError("Duplicate IDs are not allowed.")
     return values
+
+
+def _validate_positive_ids(values: list[int]) -> list[int]:
+    if any(value <= 0 for value in values):
+        raise ValueError("IDs must be positive integers.")
+    return _validate_unique_ids(values)
 
 
 def _commit(db: Session, detail: str = "The requested record conflicts with existing data.") -> None:
@@ -137,8 +144,105 @@ def _get_many(db: Session, model, ids: list[int], label: str):
     return rows
 
 
+def _get_school_classes(db: Session, class_ids: list[int]) -> list[ClassModel]:
+    _validate_unique_ids(class_ids)
+    classes = (
+        db.query(ClassModel)
+        .options(selectinload(ClassModel.sections))
+        .filter(ClassModel.id.in_(class_ids))
+        .order_by(ClassModel.id)
+        .all()
+    )
+    if len(classes) != len(class_ids):
+        found = {class_obj.id for class_obj in classes}
+        missing = sorted(set(class_ids) - found)
+        raise HTTPException(status_code=400, detail=f"Invalid class IDs: {missing}")
+    without_sections = [
+        class_obj.id for class_obj in classes if not class_obj.sections
+    ]
+    if without_sections:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Every assigned class must have at least one section: {without_sections}",
+        )
+    return classes
+
+
+def _format_school_classes(classes: list[ClassModel]) -> list[dict]:
+    return [
+        {
+            "class_id": class_obj.id,
+            "class_name": class_obj.class_name,
+            "sections": [
+                {"section_id": section.id, "section_name": section.section_name}
+                for section in class_obj.sections
+            ],
+        }
+        for class_obj in classes
+    ]
+
+
+def _require_school_classes(
+    db: Session,
+    school_id: int,
+    class_ids: list[int],
+) -> list[ClassModel]:
+    classes = _get_many(db, ClassModel, class_ids, "class")
+    if not class_ids:
+        return classes
+    assigned_class_ids = {
+        row[0]
+        for row in db.query(school_classes.c.class_id)
+        .filter(
+            school_classes.c.school_id == school_id,
+            school_classes.c.class_id.in_(class_ids),
+        )
+        .all()
+    }
+    unassigned_class_ids = sorted(set(class_ids) - assigned_class_ids)
+    if unassigned_class_ids:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Classes are not assigned to school {school_id}: {unassigned_class_ids}",
+        )
+    return classes
+
+
+def _validate_teacher_subjects(
+    db: Session,
+    class_ids: list[int],
+    subject_ids: list[int],
+) -> list[Subject]:
+    subjects = _get_many(db, Subject, subject_ids, "subject")
+    if not subject_ids:
+        return subjects
+    if not class_ids:
+        raise HTTPException(
+            status_code=422,
+            detail="class_ids are required when subject_ids are provided.",
+        )
+    assigned_subject_ids = {
+        row[0]
+        for row in db.query(class_subjects.c.subject_id)
+        .filter(
+            class_subjects.c.class_id.in_(class_ids),
+            class_subjects.c.subject_id.in_(subject_ids),
+        )
+        .distinct()
+        .all()
+    }
+    unassigned_subject_ids = sorted(set(subject_ids) - assigned_subject_ids)
+    if unassigned_subject_ids:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Subjects must be assigned to one of the teacher's classes: {unassigned_subject_ids}",
+        )
+    return subjects
+
+
 def _validate_student_placement(
     db: Session,
+    school_id: int,
     class_id: Optional[int],
     section_id: Optional[int],
 ) -> None:
@@ -146,6 +250,7 @@ def _validate_student_placement(
         raise HTTPException(status_code=422, detail="class_id is required when section_id is provided.")
     if class_id is not None:
         _get_class(db, class_id)
+        _require_school_classes(db, school_id, [class_id])
     if section_id is not None:
         section = _get_section(db, section_id)
         if section.class_id != class_id:
@@ -179,6 +284,7 @@ def _verify_school_active(school: School) -> None:
 class SchoolCreate(RequestModel):
     name: str = Field(min_length=2, max_length=255)
     school_code: str = Field(min_length=2, max_length=50)
+    class_ids: list[int] = Field(min_length=1, max_length=100)
     state: Optional[str] = Field(default=None, max_length=100)
     district: Optional[str] = Field(default=None, max_length=100)
     region: Optional[str] = Field(default=None, max_length=100)
@@ -197,10 +303,15 @@ class SchoolCreate(RequestModel):
     def normalize_code(cls, value: str) -> str:
         return value.upper()
 
+    @field_validator("class_ids")
+    @classmethod
+    def validate_class_ids(cls, value):
+        return _validate_positive_ids(value)
+
     @field_validator("school_admin_ids")
     @classmethod
     def unique_admin_ids(cls, value):
-        return _validate_unique_ids(value)
+        return _validate_positive_ids(value)
 
 
 class SchoolUpdate(RequestModel):
@@ -303,7 +414,7 @@ class SchoolAssignmentUpdate(RequestModel):
     @field_validator("admin_ids")
     @classmethod
     def unique_admin_ids(cls, value):
-        return _validate_unique_ids(value)
+        return _validate_positive_ids(value)
 
 
 class TeacherCreate(RequestModel):
@@ -332,7 +443,7 @@ class TeacherCreate(RequestModel):
     @field_validator("class_ids", "section_ids", "subject_ids")
     @classmethod
     def unique_ids(cls, value):
-        return _validate_unique_ids(value)
+        return _validate_positive_ids(value)
 
 
 class TeacherUpdate(RequestModel):
@@ -362,7 +473,7 @@ class TeacherAssignmentUpdate(RequestModel):
     @field_validator("class_ids", "section_ids", "subject_ids")
     @classmethod
     def unique_ids(cls, value):
-        return _validate_unique_ids(value)
+        return _validate_positive_ids(value)
 
 
 class ClassWithSectionCreate(RequestModel):
@@ -390,9 +501,7 @@ class ClassWithSectionCreate(RequestModel):
     @field_validator("school_ids")
     @classmethod
     def unique_school_ids(cls, values):
-        if any(school_id <= 0 for school_id in values):
-            raise ValueError("School IDs must be positive integers.")
-        return _validate_unique_ids(values)
+        return _validate_positive_ids(values)
 
 
 class ClassWithSectionUpdate(RequestModel):
@@ -459,7 +568,7 @@ class SubjectCreate(RequestModel):
     @field_validator("class_ids")
     @classmethod
     def unique_ids(cls, value):
-        return _validate_unique_ids(value)
+        return _validate_positive_ids(value)
 
     @model_validator(mode="after")
     def validate_unique_chapter_names(self):
@@ -482,7 +591,7 @@ class SubjectUpdate(RequestModel):
     @field_validator("class_ids")
     @classmethod
     def unique_ids(cls, value):
-        return _validate_unique_ids(value) if value is not None else value
+        return _validate_positive_ids(value) if value is not None else value
 
     @model_validator(mode="after")
     def validate_unique_chapter_names(self):
@@ -576,7 +685,7 @@ class ClassroomOperatorCreate(RequestModel):
     @field_validator("class_ids")
     @classmethod
     def unique_ids(cls, value):
-        return _validate_unique_ids(value)
+        return _validate_positive_ids(value)
 
 
 class ClassroomOperatorAssignmentUpdate(RequestModel):
@@ -585,7 +694,7 @@ class ClassroomOperatorAssignmentUpdate(RequestModel):
     @field_validator("class_ids")
     @classmethod
     def unique_ids(cls, value):
-        return _validate_unique_ids(value)
+        return _validate_positive_ids(value)
 
 
 # ---------------------------------------------------------------------------
@@ -597,6 +706,7 @@ def add_school(data: SchoolCreate, db: Session = Depends(get_db)):
     if db.query(School).filter(School.school_code == data.school_code).first():
         raise HTTPException(status_code=409, detail="School code already exists.")
     admins = _get_school_admins(db, data.school_admin_ids)
+    classes = _get_school_classes(db, data.class_ids)
 
     school = School(
         name=data.name,
@@ -610,10 +720,23 @@ def add_school(data: SchoolCreate, db: Session = Depends(get_db)):
     )
     school.school_admins = admins
     db.add(school)
+    try:
+        db.flush()
+        db.execute(
+            school_classes.insert(),
+            [{"school_id": school.id, "class_id": class_obj.id} for class_obj in classes],
+        )
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="School code or class assignment conflicts with existing data.",
+        ) from exc
     _commit(db, "School code or school-admin assignment conflicts with existing data.")
     db.refresh(school)
     return {"message": "School created successfully.", "school_id": school.id,
-            "assigned_admin_ids": [admin.id for admin in school.school_admins]}
+            "assigned_admin_ids": [admin.id for admin in school.school_admins],
+            "assigned_classes": _format_school_classes(classes)}
 
 
 @router.get("/schools", dependencies=[verify_super_admin])
@@ -628,6 +751,21 @@ def get_schools(
         .order_by(School.id)
         .offset(skip).limit(limit).all()
     )
+    school_ids = [school.id for school in schools]
+    school_class_assignments: dict[int, list[ClassModel]] = {
+        school_id: [] for school_id in school_ids
+    }
+    if school_ids:
+        assignments = (
+            db.query(school_classes.c.school_id, ClassModel)
+            .join(ClassModel, school_classes.c.class_id == ClassModel.id)
+            .options(selectinload(ClassModel.sections))
+            .filter(school_classes.c.school_id.in_(school_ids))
+            .order_by(school_classes.c.school_id, ClassModel.id)
+            .all()
+        )
+        for school_id, class_obj in assignments:
+            school_class_assignments[school_id].append(class_obj)
     return [{
         "school_id": s.id,
         "school_name": s.name,
@@ -640,6 +778,7 @@ def get_schools(
             {"admin_id": admin.id, "name": admin.name, "email": admin.email}
             for admin in s.school_admins
         ],
+        "assigned_classes": _format_school_classes(school_class_assignments[s.id]),
         "status": s.activation.value if hasattr(s.activation, "value") else s.activation,
     } for s in schools]
 
@@ -993,10 +1132,26 @@ def edit_class(class_id: int, data: ClassWithSectionUpdate, db: Session = Depend
             in_use = db.query(Student.id).filter(
                 (Student.class_id == class_id) | (Student.section_id.in_(removed_section_ids))
             ).first()
-            if in_use:
+            teacher_in_use = (
+                db.query(Teacher.id)
+                .join(Teacher.sections)
+                .filter(ClassSection.id.in_(removed_section_ids))
+                .first()
+            )
+            lesson_in_use = db.query(TeacherLessonContent.id).filter(
+                TeacherLessonContent.section_id.in_(removed_section_ids)
+            ).first()
+            shared_in_use = db.query(TeacherLessonShare.id).filter(
+                TeacherLessonShare.section_id.in_(removed_section_ids),
+                TeacherLessonShare.revoked_at.is_(None),
+            ).first()
+            quiz_in_use = db.query(QuestionSet.id).filter(
+                QuestionSet.section_id.in_(removed_section_ids)
+            ).first()
+            if in_use or teacher_in_use or lesson_in_use or shared_in_use or quiz_in_use:
                 raise HTTPException(
                     status_code=409,
-                    detail="One or more sections being removed have enrolled students."
+                    detail="One or more sections being removed are assigned to students or teachers, or have lesson content/access or quizzes."
                 )
         for name in requested - set(existing):
             db.add(ClassSection(class_id=class_id, section_name=name))
@@ -1018,11 +1173,26 @@ def delete_class(class_id: int, db: Session = Depends(get_db)):
     teacher_exists = db.query(Teacher.id).join(Teacher.classes).filter(ClassModel.id == class_id).first()
     subject_exists = db.query(Subject.id).join(Subject.classes).filter(ClassModel.id == class_id).first()
     operator_exists = db.query(ClassroomOperatorAssignment.id).filter(ClassroomOperatorAssignment.class_id == class_id).first()
+    lesson_exists = db.query(TeacherLessonContent.id).filter(
+        TeacherLessonContent.class_id == class_id
+    ).first()
+    quiz_exists = db.query(QuestionSet.id).filter(
+        QuestionSet.class_id == class_id
+    ).first()
+    shared_lesson_exists = (
+        db.query(TeacherLessonShare.id)
+        .join(ClassSection, ClassSection.id == TeacherLessonShare.section_id)
+        .filter(
+            ClassSection.class_id == class_id,
+            TeacherLessonShare.revoked_at.is_(None),
+        )
+        .first()
+    )
 
-    if student_exists or teacher_exists or subject_exists or operator_exists:
+    if student_exists or teacher_exists or subject_exists or operator_exists or lesson_exists or shared_lesson_exists or quiz_exists:
         raise HTTPException(
             status_code=409,
-            detail="Class is referenced by students, teachers, subjects, or classroom operators. Remove those assignments before deleting this global class."
+            detail="Class is referenced by students, teachers, subjects, classroom operators, lesson content/access, or quizzes. Remove those records before deleting this global class."
         )
     db.delete(class_obj)
     _commit(db, "Class cannot be deleted because it is referenced.")
@@ -1034,6 +1204,14 @@ def delete_class(class_id: int, db: Session = Depends(get_db)):
 # ---------------------------------------------------------------------------
 
 def _replace_chapters(db: Session, subject: Subject, chapters: list) -> None:
+    chapter_ids = [chapter.id for chapter in subject.chapters]
+    if chapter_ids and db.query(TeacherLessonContent.id).filter(
+        TeacherLessonContent.chapter_id.in_(chapter_ids)
+    ).first():
+        raise HTTPException(
+            status_code=409,
+            detail="Subject chapters cannot be replaced while lesson content references them.",
+        )
     for chapter in list(subject.chapters):
         db.delete(chapter)
     db.flush()
@@ -1120,6 +1298,7 @@ def edit_subject(subject_id: int, data: SubjectUpdate, db: Session = Depends(get
     subject = db.query(Subject).options(
         selectinload(Subject.chapters).selectinload(Chapter.topics),
         selectinload(Subject.classes),
+        selectinload(Subject.teachers).selectinload(Teacher.classes),
     ).filter(Subject.id == subject_id).first()
     if not subject:
         raise HTTPException(status_code=404, detail="Subject not found.")
@@ -1138,7 +1317,35 @@ def edit_subject(subject_id: int, data: SubjectUpdate, db: Session = Depends(get
     if "class_ids" in values:
         if values["class_ids"] is None:
             raise HTTPException(status_code=422, detail="class_ids cannot be null; use an empty list to clear mappings.")
-        subject.classes = _get_many(db, ClassModel, values["class_ids"], "class")
+        updated_classes = _get_many(db, ClassModel, values["class_ids"], "class")
+        proposed_class_ids = set(values["class_ids"])
+        removed_class_ids = {
+            class_obj.id for class_obj in subject.classes
+        } - proposed_class_ids
+        if removed_class_ids and db.query(TeacherLessonContent.id).filter(
+            TeacherLessonContent.subject_id == subject.id,
+            TeacherLessonContent.class_id.in_(removed_class_ids),
+        ).first():
+            raise HTTPException(
+                status_code=409,
+                detail="Subject class mappings cannot be removed while lesson content uses them.",
+            )
+        teachers_without_assigned_class = [
+            teacher.id
+            for teacher in subject.teachers
+            if not proposed_class_ids.intersection(
+                class_obj.id for class_obj in teacher.classes
+            )
+        ]
+        if teachers_without_assigned_class:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Subject classes cannot be changed because the update would leave "
+                    f"teachers without a matching assigned class: {teachers_without_assigned_class}"
+                ),
+            )
+        subject.classes = updated_classes
 
     if "chapters" in values:
         if values["chapters"] is None:
@@ -1154,6 +1361,13 @@ def delete_subject(subject_id: int, db: Session = Depends(get_db)):
     subject = db.query(Subject).filter(Subject.id == subject_id).first()
     if not subject:
         raise HTTPException(status_code=404, detail="Subject not found.")
+    if db.query(TeacherLessonContent.id).filter(
+        TeacherLessonContent.subject_id == subject_id
+    ).first():
+        raise HTTPException(
+            status_code=409,
+            detail="Subject cannot be deleted while lesson content references it.",
+        )
     db.delete(subject)
     _commit(db, "Subject cannot be deleted because it is referenced by other records.")
     return {"message": "Global subject and its chapters/topics deleted successfully."}
@@ -1173,9 +1387,9 @@ def add_teacher(data: TeacherCreate, db: Session = Depends(get_db)):
     if db.query(User.id).filter(func.lower(User.email) == data.email).first():
         raise HTTPException(status_code=409, detail="Email already registered.")
 
-    classes = _get_many(db, ClassModel, data.class_ids, "class")
+    classes = _require_school_classes(db, school.id, data.class_ids)
     sections = _validate_teacher_sections(db, data.class_ids, data.section_ids)
-    subjects = _get_many(db, Subject, data.subject_ids, "subject")
+    subjects = _validate_teacher_subjects(db, data.class_ids, data.subject_ids)
 
     user = User(
         name=data.name,
@@ -1210,9 +1424,17 @@ def assign_teacher_classes_and_subjects(
     teacher = db.query(Teacher).filter(Teacher.id == teacher_id).first()
     if not teacher:
         raise HTTPException(status_code=404, detail="Teacher not found.")
-    teacher.classes = _get_many(db, ClassModel, data.class_ids, "class")
-    teacher.sections = _validate_teacher_sections(db, data.class_ids, data.section_ids)
-    teacher.subjects = _get_many(db, Subject, data.subject_ids, "subject")
+    school = db.query(School).filter(School.id == teacher.school_id).first()
+    if school is None:
+        raise HTTPException(status_code=404, detail="Teacher's school not found.")
+    _verify_school_active(school)
+
+    classes = _require_school_classes(db, school.id, data.class_ids)
+    sections = _validate_teacher_sections(db, data.class_ids, data.section_ids)
+    subjects = _validate_teacher_subjects(db, data.class_ids, data.subject_ids)
+    teacher.classes = classes
+    teacher.sections = sections
+    teacher.subjects = subjects
     _commit(db, "Teacher assignments could not be saved.")
     return {"message": "Teacher assignments updated successfully.", "teacher_id": teacher.id}
 
@@ -1330,7 +1552,7 @@ def add_student(data: StudentCreate, db: Session = Depends(get_db)):
 
     if db.query(Student.id).filter(func.lower(Student.email) == data.email).first():
         raise HTTPException(status_code=409, detail="Student email already exists.")
-    _validate_student_placement(db, data.class_id, data.section_id)
+    _validate_student_placement(db, school.id, data.class_id, data.section_id)
 
     student = Student(**data.model_dump())
     db.add(student)
@@ -1392,7 +1614,7 @@ def edit_student(student_id: int, data: StudentUpdate, db: Session = Depends(get
         if old_section is None or old_section.class_id != next_class_id:
             next_section_id = None
             values["section_id"] = None
-    _validate_student_placement(db, next_class_id, next_section_id)
+    _validate_student_placement(db, student.school_id, next_class_id, next_section_id)
 
     if "name" in values and values["name"] is None:
         raise HTTPException(status_code=422, detail="Name cannot be null.")
@@ -1415,7 +1637,31 @@ def delete_student(student_id: int, db: Session = Depends(get_db)):
     student = db.query(Student).filter(Student.id == student_id).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student not found.")
+    affected_lesson_ids = {
+        row[0]
+        for row in db.query(TeacherLessonShare.lesson_id)
+        .filter(
+            TeacherLessonShare.student_id == student_id,
+            TeacherLessonShare.revoked_at.is_(None),
+        )
+        .distinct()
+        .all()
+    }
     db.delete(student)
+    db.flush()
+    now = datetime.now(timezone.utc)
+    for lesson_id in affected_lesson_ids:
+        still_shared = db.query(TeacherLessonShare.id).filter(
+            TeacherLessonShare.lesson_id == lesson_id,
+            TeacherLessonShare.revoked_at.is_(None),
+        ).first()
+        lesson = db.query(TeacherLessonContent).filter(
+            TeacherLessonContent.id == lesson_id
+        ).first()
+        if not still_shared and lesson and lesson.status == "shared":
+            lesson.status = lesson.status_before_share or "done"
+            lesson.status_before_share = None
+            lesson.updated_at = now
     _commit(db, "Student cannot be deleted because it is referenced by other records.")
     return {"message": "Student profile deleted successfully."}
 
@@ -1434,7 +1680,7 @@ def add_classroom_operator(data: ClassroomOperatorCreate, db: Session = Depends(
     if db.query(User.id).filter(func.lower(User.email) == data.email).first():
         raise HTTPException(status_code=409, detail="Email already registered.")
 
-    classes = _get_many(db, ClassModel, data.class_ids, "class")
+    classes = _require_school_classes(db, school.id, data.class_ids)
 
     user = User(
         name=data.name,
@@ -1467,8 +1713,12 @@ def assign_operator_classes(
     operator = db.query(ClassroomOperator).filter(ClassroomOperator.id == operator_id).first()
     if not operator:
         raise HTTPException(status_code=404, detail="Classroom operator not found.")
-    
-    classes = _get_many(db, ClassModel, data.class_ids, "class")
+    school = db.query(School).filter(School.id == operator.school_id).first()
+    if school is None:
+        raise HTTPException(status_code=404, detail="Classroom operator's school not found.")
+    _verify_school_active(school)
+
+    classes = _require_school_classes(db, school.id, data.class_ids)
 
     operator.class_assignments.clear()
     db.flush()

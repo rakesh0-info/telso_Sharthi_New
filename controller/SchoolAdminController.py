@@ -294,6 +294,186 @@ def get_school_classes(
     ]
 
 
+@router.get("/teachers")
+def get_school_teachers(
+    school_id: int,
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
+    school_admin: User = Depends(require_roles(RoleEnum.SCHOOL_ADMIN)),
+    db: Session = Depends(get_db),
+):
+    school = _require_school(db, school_id, school_admin)
+    teachers = (
+        db.query(Teacher)
+        .options(
+            selectinload(Teacher.user),
+            selectinload(Teacher.classes),
+            selectinload(Teacher.sections).selectinload(ClassSection.class_obj),
+            selectinload(Teacher.subjects),
+        )
+        .filter(Teacher.school_id == school.id)
+        .order_by(Teacher.id)
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "teacher_id": teacher.id,
+            "user_id": teacher.user.id if teacher.user else None,
+            "name": teacher.user.name if teacher.user else None,
+            "email": teacher.user.email if teacher.user else None,
+            "phone_number": teacher.user.phone_number if teacher.user else None,
+            "gender": (
+                teacher.user.gender.value
+                if teacher.user and hasattr(teacher.user.gender, "value")
+                else (teacher.user.gender if teacher.user else None)
+            ),
+            "school_id": teacher.school_id,
+            "school_name": school.name,
+            "qualification": teacher.qualification,
+            "assigned_classes": [
+                {"class_id": class_obj.id, "class_name": class_obj.class_name}
+                for class_obj in teacher.classes
+            ],
+            "assigned_sections": [
+                {
+                    "section_id": section.id,
+                    "section_name": section.section_name,
+                    "class_id": section.class_id,
+                    "class_name": (
+                        section.class_obj.class_name if section.class_obj else None
+                    ),
+                }
+                for section in teacher.sections
+            ],
+            "assigned_subjects": [
+                {"subject_id": subject.id, "subject_name": subject.name}
+                for subject in teacher.subjects
+            ],
+            "activation_status": (
+                teacher.user.activation_status.value
+                if teacher.user and hasattr(teacher.user.activation_status, "value")
+                else (
+                    teacher.user.activation_status if teacher.user else None
+                )
+            ),
+        }
+        for teacher in teachers
+    ]
+
+
+@router.get("/students")
+def get_school_students(
+    school_id: int,
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
+    school_admin: User = Depends(require_roles(RoleEnum.SCHOOL_ADMIN)),
+    db: Session = Depends(get_db),
+):
+    school = _require_school(db, school_id, school_admin)
+    students = (
+        db.query(Student)
+        .options(
+            selectinload(Student.class_obj),
+            selectinload(Student.section_obj),
+        )
+        .filter(Student.school_id == school.id)
+        .order_by(Student.id)
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "student_id": student.id,
+            "name": student.name,
+            "email": student.email,
+            "gender": (
+                student.gender.value
+                if hasattr(student.gender, "value")
+                else student.gender
+            ),
+            "dob": student.dob,
+            "phone_number": student.phone_number,
+            "school_id": student.school_id,
+            "school_name": school.name,
+            "class_id": student.class_id,
+            "class_name": (
+                student.class_obj.class_name if student.class_obj else None
+            ),
+            "section_id": student.section_id,
+            "section_name": (
+                student.section_obj.section_name if student.section_obj else None
+            ),
+            "parents_name": student.parents_name,
+            "parents_ph_no": student.parents_ph_no,
+            "parents_email": student.parents_email,
+        }
+        for student in students
+    ]
+
+
+@router.get("/classroom-operators")
+def get_school_classroom_operators(
+    school_id: int,
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
+    school_admin: User = Depends(require_roles(RoleEnum.SCHOOL_ADMIN)),
+    db: Session = Depends(get_db),
+):
+    school = _require_school(db, school_id, school_admin)
+    operators = (
+        db.query(ClassroomOperator)
+        .options(
+            selectinload(ClassroomOperator.user),
+            selectinload(ClassroomOperator.class_assignments).selectinload(
+                ClassroomOperatorAssignment.class_obj
+            ),
+        )
+        .filter(ClassroomOperator.school_id == school.id)
+        .order_by(ClassroomOperator.id)
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "operator_id": operator.id,
+            "user_id": operator.user.id if operator.user else None,
+            "name": operator.user.name if operator.user else None,
+            "email": operator.user.email if operator.user else None,
+            "phone_number": (
+                operator.user.phone_number if operator.user else None
+            ),
+            "gender": (
+                operator.user.gender.value
+                if operator.user and hasattr(operator.user.gender, "value")
+                else (operator.user.gender if operator.user else None)
+            ),
+            "school_id": operator.school_id,
+            "school_name": school.name,
+            "assigned_classes": [
+                {
+                    "class_id": assignment.class_obj.id,
+                    "class_name": assignment.class_obj.class_name,
+                }
+                for assignment in operator.class_assignments
+                if assignment.class_obj is not None
+            ],
+            "activation_status": (
+                operator.user.activation_status.value
+                if operator.user
+                and hasattr(operator.user.activation_status, "value")
+                else (
+                    operator.user.activation_status if operator.user else None
+                )
+            ),
+        }
+        for operator in operators
+    ]
+
+
 @router.get("/subjects")
 def get_school_subjects(
     school_id: int,
@@ -447,33 +627,28 @@ def get_school_question_sets(
     db: Session = Depends(get_db),
 ):
     _require_school(db, school_id, school_admin)
-    school_class_ids = _school_class_ids(db, school_id)
     if class_id is not None:
-        if class_id not in school_class_ids:
+        if class_id not in _school_class_ids(db, school_id):
             raise HTTPException(status_code=404, detail="Class not found for this school.")
-        school_class_ids = {class_id}
-    if not school_class_ids:
-        return []
 
-    sets = (
+    query = (
         db.query(QuestionSet)
         .options(
             selectinload(QuestionSet.class_obj),
+            selectinload(QuestionSet.section),
             selectinload(QuestionSet.subject),
             selectinload(QuestionSet.chapter),
             selectinload(QuestionSet.topic),
             selectinload(QuestionSet.creator),
             selectinload(QuestionSet.items).selectinload(QuestionSetItem.question),
         )
-        .join(
-            school_classes,
-            school_classes.c.class_id == QuestionSet.class_id,
-        )
-        .filter(
-            school_classes.c.school_id == school_id,
-            QuestionSet.class_id.in_(school_class_ids),
-        )
+        .filter(QuestionSet.school_id == school_id)
         .order_by(QuestionSet.created_at.desc(), QuestionSet.id.desc())
+    )
+    if class_id is not None:
+        query = query.filter(QuestionSet.class_id == class_id)
+    sets = (
+        query
         .offset(skip)
         .limit(limit)
         .all()
@@ -482,8 +657,11 @@ def get_school_question_sets(
         {
             "question_set_id": question_set.id,
             "name": question_set.name,
+            "school_id": question_set.school_id,
             "class_id": question_set.class_id,
             "class_name": question_set.class_obj.class_name if question_set.class_obj else None,
+            "section_id": question_set.section_id,
+            "section_name": question_set.section.section_name if question_set.section else None,
             "subject_id": question_set.subject_id,
             "subject_name": question_set.subject.name if question_set.subject else None,
             "chapter_id": question_set.chapter_id,

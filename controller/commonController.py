@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from databaseCon import get_db
 from databaseModel.chapterModel import Chapter, Topic
-from databaseModel.classModel import ClassModel
+from databaseModel.classModel import ClassModel, school_classes
 from databaseModel.contentModel import Content
 from databaseModel.contentModel import Content
 from databaseModel.questionSetModel import Question, QuestionSet, QuestionSetItem
@@ -23,6 +23,7 @@ from databaseModel.schoolModel import School
 from databaseModel.subjectModel import Subject
 from databaseModel.teacherModel import Teacher
 from databaseModel.userModel import User
+from databaseModel.schoolAdminAssociation import school_admin_assignments
 from enums import ActivationStatus, ContentTypeEnum, RoleEnum
 from jwts.DB_Security_Config import require_roles
 from controller.publicController import limiter
@@ -48,7 +49,7 @@ from util_validate.util_file_security import save_upload_file, remove_file
 router = APIRouter(prefix="/api/common", tags=["Common to Admin, school admin, and content Admin"])
 logger = logging.getLogger(__name__)
 
-GEMINI_MODEL = "gemini-3.8-flash"
+GEMINI_MODEL = "gemini-3.5-flash"
 GEMINI_URL = (
     "https://generativelanguage.googleapis.com/v1beta/"
     f"models/{GEMINI_MODEL}:generateContent"
@@ -99,6 +100,7 @@ class RequestModel(BaseModel):
 
 class GenerateQuestionSetRequest(RequestModel):
     name: str = Field(min_length=2, max_length=150)
+    school_id: int = Field(gt=0)
     class_id: int = Field(gt=0)
     subject_id: int = Field(gt=0)
     chapter_id: int = Field(gt=0)
@@ -502,30 +504,56 @@ def _resolve_actor_context(
     data: GenerateQuestionSetRequest,
 ) -> tuple[Teacher | None, ClassModel, Subject, Chapter, Topic | None]:
     role = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
-    teacher = (
-        db.query(Teacher)
-        .options(selectinload(Teacher.school))
-        .filter(Teacher.user_id == current_user.id)
-        .first()
-    )
+    teacher = None
+    if role == RoleEnum.TEACHER.value:
+        teacher = (
+            db.query(Teacher)
+            .options(selectinload(Teacher.school))
+            .filter(Teacher.user_id == current_user.id)
+            .first()
+        )
     if role == RoleEnum.TEACHER.value and teacher is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="A teacher profile is required to generate question sets.",
         )
-    if teacher is not None and (
-        teacher.school is None
-        or getattr(teacher.school.activation, "value", teacher.school.activation)
-        != ActivationStatus.ACTIVE.value
-    ):
+
+    school = db.query(School).filter(School.id == data.school_id).first()
+    if school is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="School not found.")
+    if getattr(school.activation, "value", school.activation) != ActivationStatus.ACTIVE.value:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Question sets cannot be generated for an inactive school.",
         )
+    if role == RoleEnum.TEACHER.value and teacher.school_id != school.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not assigned to the selected school.",
+        )
+    if role == RoleEnum.SCHOOL_ADMIN.value:
+        school_assignment = db.query(school_admin_assignments.c.school_id).filter(
+            school_admin_assignments.c.school_id == school.id,
+            school_admin_assignments.c.admin_id == current_user.id,
+        ).first()
+        if school_assignment is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not assigned to the selected school.",
+            )
 
     class_obj = db.query(ClassModel).filter(ClassModel.id == data.class_id).first()
     if class_obj is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Class not found.")
+    school_class = db.query(school_classes.c.class_id).filter(
+        school_classes.c.school_id == school.id,
+        school_classes.c.class_id == class_obj.id,
+    ).first()
+    if school_class is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="The selected class is not assigned to the selected school.",
+        )
     if teacher is not None and not any(
         assigned_class.id == class_obj.id for assigned_class in teacher.classes
     ):
@@ -549,28 +577,6 @@ def _resolve_actor_context(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="The selected subject is not available for the selected class.",
         )
-    if role == RoleEnum.SCHOOL_ADMIN.value:
-        administered_school_ids = [
-            school.id for school in current_user.administered_schools
-            if getattr(school.activation, "value", school.activation) == ActivationStatus.ACTIVE.value
-        ]
-        teacher_in_school = (
-            db.query(Teacher.id)
-            .filter(
-                Teacher.school_id.in_(administered_school_ids),
-                Teacher.classes.any(ClassModel.id == class_obj.id),
-                Teacher.subjects.any(Subject.id == subject.id),
-            )
-            .first()
-            if administered_school_ids
-            else None
-        )
-        if teacher_in_school is None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You are not authorized for the selected class and subject.",
-            )
-
     chapter = db.query(Chapter).filter(Chapter.id == data.chapter_id).first()
     if chapter is None or chapter.subject_id != subject.id:
         raise HTTPException(
@@ -627,6 +633,7 @@ def generate_question_set(
         _resolve_actor_context(db, current_user, data)
         question_set = QuestionSet(
             name=data.name,
+            school_id=data.school_id,
             class_id=data.class_id,
             subject_id=data.subject_id,
             chapter_id=data.chapter_id,
@@ -663,6 +670,7 @@ def generate_question_set(
         result = {
             "question_set_id": question_set.id,
             "name": question_set.name,
+            "school_id": question_set.school_id,
             "question_count": question_set.question_count,
             "question_types": question_set.question_type,
             "question_levels": question_set.question_level,

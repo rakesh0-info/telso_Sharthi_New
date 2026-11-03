@@ -4,9 +4,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 import os
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, selectinload
 from jose import jwt, JWTError
 
@@ -17,6 +18,9 @@ from databaseModel.classModel import ClassModel, ClassSection
 from databaseModel.teacherModel import Teacher
 from databaseModel.studentModel import Student
 from databaseModel.subjectModel import Subject
+from databaseModel.teacherLessonModel import TeacherLessonContent, TeacherLessonShare
+from databaseModel.questionSetModel import QuestionSet, QuestionSetItem
+from databaseModel.teacherQuizModel import TeacherQuizPublication
 from enums import RoleEnum, ActivationStatus, GenderEnum
 
 router = APIRouter(prefix="/api/student", tags=["Student Portal"])
@@ -228,4 +232,231 @@ def get_student_dashboard(
             "parents_ph_no": current_student.parents_ph_no,
             "parents_email": current_student.parents_email,
         }
+    }
+
+
+@router.get("/lessons", status_code=status.HTTP_200_OK)
+def get_shared_lessons(
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
+    current_student: Student = Depends(get_current_student),
+    db: Session = Depends(get_db),
+):
+    school = current_student.school
+    status_value = (
+        school.activation.value
+        if school and hasattr(school.activation, "value")
+        else (school.activation if school else None)
+    )
+    if school is None or status_value != ActivationStatus.ACTIVE.value:
+        raise HTTPException(
+            status_code=403,
+            detail="Lesson access is unavailable for an inactive or missing school.",
+        )
+    if current_student.class_id is None or current_student.section_id is None:
+        return []
+
+    lessons = (
+        db.query(TeacherLessonContent)
+        .join(
+            TeacherLessonShare,
+            TeacherLessonShare.lesson_id == TeacherLessonContent.id,
+        )
+        .options(
+            selectinload(TeacherLessonContent.class_obj),
+            selectinload(TeacherLessonContent.section),
+            selectinload(TeacherLessonContent.subject),
+            selectinload(TeacherLessonContent.chapter),
+            selectinload(TeacherLessonContent.topic),
+        )
+        .filter(
+            TeacherLessonContent.school_id == current_student.school_id,
+            TeacherLessonContent.class_id == current_student.class_id,
+            TeacherLessonShare.section_id == current_student.section_id,
+            TeacherLessonShare.revoked_at.is_(None),
+            or_(
+                TeacherLessonShare.student_id.is_(None),
+                TeacherLessonShare.student_id == current_student.id,
+            ),
+        )
+        .distinct()
+        .order_by(TeacherLessonContent.updated_at.desc(), TeacherLessonContent.id.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "lesson_id": lesson.id,
+            "name": lesson.name,
+            "content": lesson.content,
+            "content_type": lesson.content_type,
+            "status": "shared",
+            "school_id": lesson.school_id,
+            "class_id": lesson.class_id,
+            "class_name": lesson.class_obj.class_name if lesson.class_obj else None,
+            "section_id": current_student.section_id,
+            "section_name": (
+                current_student.section_obj.section_name
+                if current_student.section_obj
+                else None
+            ),
+            "subject_id": lesson.subject_id,
+            "subject_name": lesson.subject.name if lesson.subject else None,
+            "chapter_id": lesson.chapter_id,
+            "chapter_name": lesson.chapter.chapter_name if lesson.chapter else None,
+            "topic_id": lesson.topic_id,
+            "topic_name": lesson.topic.topic_name if lesson.topic else None,
+            "created_at": lesson.created_at,
+            "updated_at": lesson.updated_at,
+        }
+        for lesson in lessons
+    ]
+
+
+def _quiz_is_active(question_set: QuestionSet, now: datetime) -> bool:
+    if question_set.scheduled_at is None:
+        return False
+    scheduled_at = question_set.scheduled_at
+    if scheduled_at.tzinfo is None:
+        scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+    else:
+        scheduled_at = scheduled_at.astimezone(timezone.utc)
+    return scheduled_at <= now < scheduled_at + timedelta(minutes=question_set.duration_minutes)
+
+
+def _quiz_is_listable(question_set: QuestionSet, now: datetime) -> bool:
+    if question_set.scheduled_at is None:
+        return False
+    scheduled_at = question_set.scheduled_at
+    if scheduled_at.tzinfo is None:
+        scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+    else:
+        scheduled_at = scheduled_at.astimezone(timezone.utc)
+    return scheduled_at + timedelta(minutes=question_set.duration_minutes) > now
+
+
+def _student_quiz_query(db: Session, current_student: Student):
+    return (
+        db.query(QuestionSet)
+        .join(
+            TeacherQuizPublication,
+            TeacherQuizPublication.question_set_id == QuestionSet.id,
+        )
+        .join(
+            ClassSection,
+            ClassSection.id == TeacherQuizPublication.section_id,
+        )
+        .filter(
+            TeacherQuizPublication.section_id == current_student.section_id,
+            TeacherQuizPublication.class_id == current_student.class_id,
+            ClassSection.class_id == QuestionSet.class_id,
+            TeacherQuizPublication.class_id == QuestionSet.class_id,
+            QuestionSet.school_id == current_student.school_id,
+            QuestionSet.class_id == current_student.class_id,
+            QuestionSet.section_id == current_student.section_id,
+        )
+    )
+
+
+@router.get("/quizzes", status_code=status.HTTP_200_OK)
+def get_available_student_quizzes(
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
+    current_student: Student = Depends(get_current_student),
+    db: Session = Depends(get_db),
+):
+    school = current_student.school
+    school_status = (
+        school.activation.value
+        if school and hasattr(school.activation, "value")
+        else (school.activation if school else None)
+    )
+    if school is None or school_status != ActivationStatus.ACTIVE.value:
+        raise HTTPException(status_code=403, detail="Quiz access is unavailable for an inactive or missing school.")
+    if current_student.class_id is None or current_student.section_id is None:
+        return []
+    if (
+        current_student.section_obj is None
+        or current_student.section_obj.class_id != current_student.class_id
+    ):
+        return []
+
+    now = datetime.now(timezone.utc)
+    question_sets = (
+        _student_quiz_query(db, current_student)
+        .filter(QuestionSet.scheduled_at.isnot(None))
+        .order_by(QuestionSet.scheduled_at, QuestionSet.id)
+        .all()
+    )
+    listable_question_sets = [
+        question_set
+        for question_set in question_sets
+        if _quiz_is_listable(question_set, now)
+    ]
+    return [
+        {
+            "question_set_id": question_set.id,
+            "name": question_set.name,
+            "class_id": question_set.class_id,
+            "subject_id": question_set.subject_id,
+            "chapter_id": question_set.chapter_id,
+            "topic_id": question_set.topic_id,
+            "question_count": question_set.question_count,
+            "scheduled_at": question_set.scheduled_at,
+            "duration_minutes": question_set.duration_minutes,
+            "status": "active" if _quiz_is_active(question_set, now) else "upcoming",
+        }
+        for question_set in listable_question_sets[skip : skip + limit]
+    ]
+
+
+@router.get("/quizzes/{question_set_id}", status_code=status.HTTP_200_OK)
+def get_active_student_quiz(
+    question_set_id: int = Path(gt=0),
+    current_student: Student = Depends(get_current_student),
+    db: Session = Depends(get_db),
+):
+    school = current_student.school
+    school_status = (
+        school.activation.value
+        if school and hasattr(school.activation, "value")
+        else (school.activation if school else None)
+    )
+    if school is None or school_status != ActivationStatus.ACTIVE.value:
+        raise HTTPException(status_code=403, detail="Quiz access is unavailable for an inactive or missing school.")
+    if current_student.class_id is None or current_student.section_id is None:
+        raise HTTPException(status_code=404, detail="Quiz not found.b")
+    if (
+        current_student.section_obj is None
+        or current_student.section_obj.class_id != current_student.class_id
+    ):
+        raise HTTPException(status_code=404, detail="Quiz not found.a")
+
+    question_set = (
+        _student_quiz_query(db, current_student)
+        .options(selectinload(QuestionSet.items).selectinload(QuestionSetItem.question))
+        .filter(QuestionSet.id == question_set_id)
+        .first()
+    )
+    if question_set is None or not _quiz_is_active(question_set, datetime.now(timezone.utc)):
+        raise HTTPException(status_code=404, detail="Quiz is not available.s")
+    return {
+        "question_set_id": question_set.id,
+        "name": question_set.name,
+        "class_id": question_set.class_id,
+        "section_id": current_student.section_id,
+        "scheduled_at": question_set.scheduled_at,
+        "duration_minutes": question_set.duration_minutes,
+        "questions": [
+            {
+                "question_id": item.question.id,
+                "position": item.position,
+                "question_text": item.question.question_text,
+                "options": item.question.options or [],
+                "question_type": item.question.question_type,
+                "question_level": item.question.question_level,
+            }
+            for item in question_set.items
+        ],
     }

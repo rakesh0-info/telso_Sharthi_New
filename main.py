@@ -19,6 +19,8 @@ import databaseModel.subjectModel
 import databaseModel.chapterModel
 import databaseModel.schoolAdminAssociation
 import databaseModel.questionSetModel
+import databaseModel.teacherLessonModel
+import databaseModel.teacherQuizModel
 
 
 from controller.publicController import limiter, router as public
@@ -26,6 +28,8 @@ from controller.SuperAdminController import router as super_admin
 from controller.SchoolAdminController import router as school_admin
 from controller.StudentController import router as student
 from controller.commonController import router as common
+from controller.TeacherAdminController import router as teacher_admin
+from controller.TeacherAdminController import teacher_router as teacher_management
 
 
 
@@ -54,3 +58,5 @@ app.include_router(super_admin)
 app.include_router(school_admin)
 app.include_router(student)
 app.include_router(common)
+app.include_router(teacher_admin)
+app.include_router(teacher_management)
