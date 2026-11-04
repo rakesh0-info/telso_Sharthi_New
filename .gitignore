@@ -15,3 +15,7 @@ __pycache__/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Local Celery Beat scheduler state
+celerybeat-schedule*
+analysis.md

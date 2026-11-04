@@ -1,0 +1,51 @@
+What is Java?
+Java is a widely-used programming language for coding web applications. It has been a popular choice among developers for over two decades, with millions of Java applications in use today. Java is a multi-platform, object-oriented, and network-centric language that can be used as a platform in itself. It is a fast, secure, reliable programming language for coding everything from mobile apps and enterprise software to big data applications and server-side technologies.
+
+What is Java programming language used for?
+What is Java programming language used for? 
+Because Java is a free-to-use and a versatile language, it builds localized and distributed software. Some common uses of Java include:
+
+1.     Game Development
+Many popular mobile, computer, and video games are built in Java. Even modern games that integrate advanced technology like machine learning or virtual reality are built with Java technology.
+
+2.     Cloud computing
+Java is often referred to as WORA – Write Once and Run Anywhere, making it perfect for decentralized cloud-based applications. Cloud providers choose Java language to run programs on a wide range of underlying platforms.
+
+3.     Big Data
+Java is used for data processing engines that can work with complex data sets and massive amounts of real-time data.
+
+4.     Artificial Intelligence
+Java is a powerhouse of machine learning libraries. Its stability and speed make it perfect for artificial intelligence application development like natural language processing and deep learning.
+
+5.     Internet of Things
+Java has been used to program sensors and hardware in edge devices that can connect independently to the internet.
+
+Why is Java such a popular choice among modern-day software developers?
+Java is popular because it has been designed for ease of use. Some reasons developers continue to choose Java over other programming languages include:
+
+High quality learning resources
+Java has been around for a long time, so many learning resources are available for new programmers. Detailed documentation, comprehensive books, and courses support developers through the learning curve. In addition, beginners can start writing code in Core Java before moving to Advanced Java.
+
+Inbuilt functions and libraries
+When using Java, developers don’t need to write every new function from scratch. Instead, Java provides a rich ecosystem of in-built functions and libraries to develop a range of applications. 
+
+Active community support
+Java has many active users and a community that can support developers when they face coding challenges. The Java platform software is also maintained and updated regularly.
+
+High-quality development tools
+Java offers various tools to support automated editing, debugging, testing, deployment, and change management. These tools make Java programming time and cost-efficient.
+
+Platform Independent
+Java code can run on any underlying platform like Windows, Linux, iOS, or Android without rewriting. This makes it especially powerful in today’s environment, where we want to run applications on multiple devices.
+
+Security
+Users can download untrusted Java code over a network and run it in a secure environment in which it cannot do any harm. Untrusted code cannot infect the host system with a virus nor can it read or write files from the hard drive. The security levels and restrictions in Java are also highly configurable.
+
+How does Java work?
+All programming languages are a means to communicate with machines. Machine hardware only responds to electronic communication. High-level programming languages like Java act as a bridge between human language and hardware language. To use Java, a developer needs to understand two things:
+
+1. Java language and APIs
+This is the front-end communication between the developer and the Java platform.
+
+2. Java Virtual Machine
+This is the back-end communication between the Java platform and the underlying hardware. Let’s look at each of these in detail below.

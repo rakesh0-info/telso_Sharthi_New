@@ -20,7 +20,11 @@ import databaseModel.chapterModel
 import databaseModel.schoolAdminAssociation
 import databaseModel.questionSetModel
 import databaseModel.teacherLessonModel
+import databaseModel.teacherChapterNoteModel
+import databaseModel.teacherTeachingNoteModel
+import databaseModel.teacherHomeworkModel
 import databaseModel.teacherQuizModel
+import databaseModel.internalExamModel
 
 
 from controller.publicController import limiter, router as public

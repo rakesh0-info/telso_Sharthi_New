@@ -1,0 +1,448 @@
+hischapt er is a tourofthe basic comp onents of Go. Wehop e to provide enough infor mat ion
+andexamples toget you off the gro und and doing usefulthings as quickly as possible. The
+examples here, and indeed inthe whole book, areaimed attasks thatyou mig hthave to do in
+therealwor ld. Inthischapt erwe’ll try to giveyou a taste ofthe diversity ofprogramsthatone
+mig htwrite inGo, ranging fro m simple file pro cessingand a bit of graphics tocon cur rent
+Internet clients andser vers. Wecer tain lywon’texplain everything in the firs t ch apt er, but
+studying suchprograms in a new langu agecan be an effec tive way toget started.
+Wh enyou’re learninganew langu age, there’sanatural tendency towrite code as you wou ld
+have writt en it in a langu ageyou already know. Beaware of thisbias as you learn Goand try
+to avoid it. We’ve tried toillustrateand explain how towrite good Go, souse the codehereas
+aguide whenyou’re writing your own.
+1.1. Hello, World
+We’ll start wit h thenow-t radition al ‘‘hel lo, wor ld’’ example, whichapp ears at the beg inningof
+TheCProgrammi n g Lang uage,publishe d in 1978. C is one ofthe most direc t influences on
+Go,and ‘‘hel lo, wor ld’’ illustrates a number of central ideas.
+gopl.io/ch1/helloworld
+package main
+import "fmt"
+func main() {
+fmt.Println("Hello, BF")
+}
+1
+
+2CHAPTER 1. TUTORIAL
+Go isacompi led langu age. The Gotoolchain conv ertsasourceprogram andthe things it
+dep ends onint o inst ruc tions inthe nat ive machinelangu age of a computer. These tools are
+accessedthrough a singlecommand cal le d go that has a number of sub command s.The simplest of these sub command s is run,whichcompi les the sourcecodefro m on e or moresource
+files whose names endin .go,lin ks it wit h librar ies, then runsthe resulting exe cut able file.
+(Wewill use $ as the command pro mpt throughoutthe book.)
+$ go run helloworld.go
+No t surprisingly, thisprints
+Hello, BF
+Go nat ive lyhandles Unico de, so it can pro cesstext in allthe wor ld’slangu ages.
+If the program ismorethanaone-shotexp eriment, it’slikelythatyou wou ldwant to compi le
+it once andsavethe compi led resultfor later use.That is don e with go build:
+$ go build helloworld.go
+Thiscre ates an exe cut ablebinar y file cal le d helloworld that can berun anytimewit houtfurther pro cessing:
+$./helloworld
+Hello, BF
+We havelab ele d each sig nificant example as a reminder thatyou can obt ain the codefro m the
+book’ssourcecoderep ository at gopl.io:
+gopl.io/ch1/helloworld
+If you run go get gopl.io/ch1/helloworld, it will fetch the sourcecodeand place itinthe
+correspondingdirec tor y.There’smoreabout thistopic in Sec tion 2.6 andSec tion 10.7.
+Let’snow tal k ab out the program its elf.Gocode is organize d into packages, whichare simi lar
+to librar ies or modules in other langu ages. A packagecon sists ofone ormore .go source files
+in a singledirec tor y that define whatthe packagedoes. Eachsource file beg inswit h a package
+de clarat ion, here package main,thatstateswhichpackagethe file belon gsto, fol low ed by a list
+of other packages that it imp orts, andthenthe declarat ions ofthe program thatare store d in
+that file.
+The Go stand ard librar y hasover100 packages for commontasks like inp utand out put,
+sorting, and text manipu lat ion. For ins tance,the fmt packagecontainsfunctions for printing
+formatte d output and scanninginp ut. Println is one ofthe basic out put functions in fmt;it
+pr intsone ormorevalues, sep arated byspaces, wit h anewlinecharac ter at the end sothatthe
+values appear as a singleline of out put.
+Package main is speci al.Itdefinesastand alone exe cut ableprogram, not a librar y.Wit hin
+package main the func tion main is als o sp eci al—it’swhere exe cut ion of the program beg ins.
+Wh ate ver main do es is whatthe program does. Of course, main wi l l normal lycal l up on function s in other packages to do much of the wor k,such as the function fmt.Println.
+
+SECTION 1.1. HELLO, WORLD 3
+We musttel l thecompi ler whatpackages areneeded bythissource file; that’sthe roleofthe
+import de clarat ionthatfol lowsthe package de clarat ion. The ‘‘hel lo, wor ld’’ prog ram us es
+on lyone functionfro m on e ot her package, but mostprogramswill imp ort morepackages.
+Yo u mu stimp ort exac tly the packages you need.A prog ram wi l l notcompi le if there are
+missingimp orts or if there are unnecessary ones. Thisstr ict requirementpre vents references
+to unu sed packages fro m acc umulat ing as programsevo l ve.
+The import de clarat ions mustfol low the package de clarat ion. After that, a program consists
+of the declarat ions offunctions,var iables, cons tants, andtyp es (introduce d by the key words
+func, var, const,and type); for the most par t, theorder ofdeclarat ions doesnot matter. This
+prog ram is about asshort aspossiblesince itdeclaresonlyone function, which in tur n calls
+on lyone other function. Tosavespace, we will som etimesnot showthe package and import
+de clarat ions whenpresent ing examples, but the y are in the source file andmust be there to
+comp ile the code.
+Afunctiondeclarat ioncon sists ofthe key word func,the name of the function, a parameter
+list (empt y for main), a resultlist(also emp tyhere), andthe body of the function—thestatementsthatdefine what it does—enclos ed in braces. We’ll takeaclos er lo ok at functions in
+Chapter5.
+Go doesnot requiresemicolons atthe end s of statements or declarat ions,exceptwhere two or
+more app ear onthe sameline. Ineffec t,newlines fol low ing cer tain tokensare converted int o
+semicolons, so where newlines areplace d matt ers to pro per parsingof Go code. For ins tance,
+theopeningbrace { of the functionmust be on the sameline as the end ofthe func de claration,not onaline by its elf,and inthe expression x+y,anewline is per mitt edafter but not
+before the + op erator.
+Go takes a stron g st ance on codefor matting . The gofmt to olrewritescodeint o thestand ard
+format, andthe go to ol’s fmt su bcommandapp lies gofmt to all the files in the specified package, orthe ones in the cur rentdirec tor y by defau lt. All Gosource files in the bookhavebeen
+runthrough gofmt,and you shouldget into the habit of doing the samefor yourown code.
+Decl aring a stand ard for mat by fiat eliminates a lot of point lessdeb ate about trivia and,more
+importantly, enables a variet y of aut omated sourcecodetransfor mat ions thatwou ldbe
+infeasible if arbit rar y formatting were allow ed.
+Many text editors can beconfigured torun gofmt each timeyou savea file, so thatyoursource
+co de is always pro perly for matte d. Arel ate d to ol, goimports,addition allymanages the ins ertion and removal ofimp ort declarat ions asneeded.It is not par t of the stand ard distr ibution
+butyou can obt ain itwit h this command:
+$ go get golang.org/x/tools/cmd/goimports
+Fo r most users,the usu alway todow nlo ad andbui ld packages, run their tests, showtheir documentation,and soon, iswit h the go to ol, whichwe’ll look at in Sec tion 10.7.
+
+4CHAPTER 1. TUTORIAL
+1.2. Command-Line Arguments
+Most programspro cesssom e input to pro duce som e output;that’sprett y much the definition
+of computing . Buthow doesaprogram get inputdat a on which to operate? Som e prog rams
+generatetheir own data,but moreoften, inputcom esfro m an exter nal source: a file,anet wor k
+connec tion,the out put of another program, a user at a key board , command-linearguments,
+or the like. The next few examples will dis cusssom e of these alt ernat ives, startingwit h command-linearguments.
+The os packageprovides functions and other values for dealingwit h theoperat ingsystem in a
+pl atfor m-indep endentfashion. Command-linearguments areavai lable toaprogram in a
+var iable named Args that ispar t of the os package; thu s itsnameany where outside the os
+packageis os.Args.
+Thevar iable os.Args is a sli ce of str ings. Slices areafundament alnot ion inGo, and we’ll tal k
+alot moreabout themsoon. For now,thin k of a slice as a dynamic ally size d sequence s of
+ar ray elements where indiv idu alelements can beaccessedas s[i] andacontiguous subsequence as s[m:n].The number of elements isgiven by len(s).As in mostother programminglangu ages, allindexing in Go uses half-open intervalsthatinclude the firs t index but
+exclude the last, because itsimplifies logic. For example, the slice s[m:n],where 0 ≤ m ≤ n ≤
+len(s),contains n-m elements.
+The firs t elementof os.Args, os.Args[0], is the name of the command its elf; the other elementsare the arguments thatwerepresent ed to the program when it started exe cut ion.A
+slice expression of the for m s[m:n] yields a slice thatrefers to elements m thro ugh n-1, so the
+elements weneed for our next exampleare those inthe slice os.Args[1:len(os.Args)].If m
+or n is omitt ed, itdefau lts to0or len(s) resp ectively, so we can abbreviate the desired slice as
+os.Args[1:].
+Here’s an imp lementation of the Unix echo command, whichprintsits command-linearguments on a singleline. Itimp ortstwo packages, whichare given as a parenthesize d list rat her
+than as individu al import de clarat ions.Eit her for m is legal,but convent ion allythe listfor m is
+us ed. The order ofimp ortsdoesn’tmatter; the gofmt to olsor tsthe packagenames into
+alph abeticalorder.(Wh enthere are several versions of an example, wewill often number
+them soyou can besure of whichone we’re tal kingabout.)
+gopl.io/ch1/echo1
+// Echo1 prints its command-line arguments.
+package main
+import (
+"fmt"
+"os"
+)
+
+SECTION 1.2. COMMAND-LINE ARGUMENTS5
+func main() {
+var s, sep string
+for i := 1; i < len(os.Args); i++ {
+s+=sep + os.Args[i]
+sep = " "
+}
+fmt.Println(s)
+}
+Comments beg in with //.All text fro m a // to the end ofthe line is comment ary for
+prog rammersand isignored bythe compi ler.Byconvent ion, we des crib e each package in a
+commentimmediate lypre cedingits packagedeclarat ion; for a main package, thiscomment is
+on e or morecompletesentences thatdes crib e theprogram as a whole.
+The var de clarat iondeclarestwo var iables s and sep, of typ e string.A var iable can beinitialize d as par t of itsdeclarat ion. If it is not explicitlyinitialize d, it is imp licitlyinitialize d to
+the zero value forits typ e,whichis 0 fornumer ic typesand the emp tystr ing "" forstr ings.
+Thus inthisexample, the declarat ionimp licitlyinitializes s and sep to emp tystr ings. We’ll
+have more to say aboutvar iables anddeclarat ions inChapt er2.
+Fo r numb ers, Go provides the usu alarithmeticand log ical operator s.Whenapp lie d to
+st rings, how ever, the + op erator concatenate s thevalues, sothe expression
+sep + os.Args[i]
+repres ents the con catenat ion of the str ings sep and os.Args[i].The statement weusedin
+theprogram,
+s += sep + os.Args[i]
+is an assig nment statement that conc atenatesthe old value of s with sep and os.Args[i] and
+assig ns it backto s; it is equivalentto
+s=s+sep + os.Args[i]
+Theoperator += is an assig nment operator.Eacharithmeticand log ical operator like + or * has
+acor respondingassig nmentoperator.
+The echo prog ram couldhaveprint edits out put inaloopone pie ce at a time, but thisversion
+insteadbui lds up a str ing byrep eatedlyapp endingnew text tothe end.The str ing s st artslife
+empt y,thatis, wit h value "",and eachtripthrough the loopaddssom e text toit; afterthe firs t
+it erat ion, a space isals o inserted sothatwhenthe loopis finishe d,there isone space bet ween
+each argument. This is a quadrat ic processthatcou ld be costly if the number of arguments is
+large , butfor echo,that’sunlikely. We’ll showanumber of imp rov edversions of echo in this
+ch apt erand the next thatwill dealwit h anyrealinefficiency.
+Theloopindex variable i is declare d in the firs t part ofthe for lo op. The := sy mbol is par t of
+a sh ort var iab ledeclarati on,astatement thatdeclaresone ormorevar iables andgives them
+appropriatetyp es based on the initializer values; there’smoreabout this in the next chapt er.
+Theincrement statement i++ adds1to i;it’sequivalentto i += 1 which is in tur n equivalent
+to i=i+1.There’sacor respondingdecrement statement i-- that subtrac ts 1. Thes e are
+
+6CHAPTER 1. TUTORIAL
+st atements, not expressions asthe y are in mostlangu ages in the C fami ly, so j=i++ is illegal,
+andthe y arepostfixonly, so --i is not legal either.
+The for lo op is the onlyloopstatement inGo. Ithas a number of for ms, one ofwhichis
+illustrated here:
+for initialization; condition; post {
+// zero or more statements
+}
+Parent hes es arenever usedaro und the three components of a for lo op. The braces are
+mand atory,how ever, and the openingbrace must be on the sameline as the post st atement.
+Theopt ion al initialization st atement isexe cut edbeforethe loopstarts. If it is present,it
+mu st be a simp lestatement,thatis, a short var iable decl arat ion, an increment or assig nment
+st atement, or a functioncal l.The condition is a boole an expressionthat is evaluate d at the
+beginning of eachiterat ion of the loop; if itevaluatesto true,the statementscontrol led bythe
+lo opare exe cut ed. The post st atement isexe cut edafter the body of the loop, thenthe con dition isevaluate d again. Theloopend s when the con dit ion becom esfalse.
+Any of these par ts may be omitt ed. Ifthere isno initialization andno post,the semicolons may also beomitt ed:
+// a traditional "while" loop
+for condition {
+// ...
+}
+If the con dit ion isomitt edent ire ly in any ofthese for ms, for examplein
+// a traditional infinite loop
+for {
+// ...
+}
+theloop is infinite, thoug h lo ops ofthisfor m may be ter minated insom e ot her way,likea
+break or return st atement.
+Anot her for m of the for lo opiterates overa ra nge of values fro m adat a type likea st ring or a
+slice.Toillustrate, here’sasecon d versionof echo:
+gopl.io/ch1/echo2
+// Echo2 prints its command-line arguments.
+package main
+import (
+"fmt"
+"os"
+)
+
+SECTION 1.2. COMMAND-LINE ARGUMENTS7
+func main() {
+s, sep := "", ""
+for _, arg := range os.Args[1:] {
+s+=sep + arg
+sep = " "
+}
+fmt.Println(s)
+}
+In eachiterat ion of the loop, range produces a pair ofvalues: the index andthe value ofthe
+element at thatindex. Inthisexample, wedon’tneed the index, but the syntax of a range lo op
+re quires that if we dealwit h theelement, wemustdealwit h theindex too.One ide a wouldbe
+to assig n theindex to an obv iou sly temporar y var iable like temp andignoreits value,but Go
+do es notper mitunu sed local variables, sothiswou ldresult in a compi lat ionerror.
+Thesolut ion is to use the bl ank ident ifier,whose nameis _ (t hat is, an underscore). Theblank
+identifier may beusedwhene ver synt axrequires a variablenamebut prog ram log ic do es not,
+forins tance todis card an unwante d lo opindex when we requireonlythe elementvalue.Most
+Go programmerswou ldlikelyuse range and _ to write the echo prog ram as abov e,since the
+indexingover os.Args is imp licit, not explicit, andthu s easier toget rig ht.
+Thisversion of the program usesa short var iable decl arat ion to declare and initialize s and
+sep,but wecou ldequ allywel l have declare d thevar iables sep arately. There are several ways
+to declare a str ing var iable; these are all equivalent:
+s := ""
+var s string
+var s = ""
+var s string = ""
+Whyshouldyou preferone for m to another? The firs t form,ashort var iable decl arat ion, is
+themostcompact,but it may beusedonlywit hin a function, not for package-le vel var iables.
+Thesecon d form relies ondefau ltinitializat ion to the zerovalue for str ings, whichis "".The
+thirdfor m is rarelyusedexceptwhendeclaring multiplevar iables. Thefourthfor m is explicit
+ab out the var iable’styp e,which is redundant when it is the sameasthat of the initial value but
+ne cessary inother cas es wherethe y arenot ofthe sametyp e.Inprac tice,you shouldgeneral ly
+us e on e of the firs t twofor ms, wit h explicitinitializat ion to say thatthe initial value is
+importantand imp licitinitializat ion to say thatthe initial value doesn’tmatter.
+As not edabove , each timearo und the loop, the str ing s gets comp letelynew contents. The +=
+st atement makes a new str ing bycon catenat ingthe old str ing , aspace charac ter,and the next
+argument, thenassig nsthe newstr ing to s.The old cont entsof s arenolon g er in use, so the y
+wi l l be garb age-collec ted indue course.
+If the amount of dat a invo l ved is large , this cou ld be costly. A simpler andmoreefficient
+solut ion wou ld be to use the Join func tionfro m the strings package:
+
+8CHAPTER 1. TUTORIAL
+gopl.io/ch1/echo3
+func main() {
+fmt.Println(strings.Join(os.Args[1:], " "))
+}
+Final ly, if we don’tcareabout for mat but justwanttosee the values, perhaps for debug ging, we
+canlet Println format the results for us:
+fmt.Println(os.Args[1:])
+Theout put of thisstatement islikewhat we wou ldget fro m strings.Join,but wit h surro undingbrackets. Any slice may beprint edthisway.
+Exercis e 1.1: Mo dif y the echo prog ram to als o pr int os.Args[0],the name of the command
+that invo ked it.
+Exercis e 1.2: Mo dif y the echo prog ram to print the index andvalue ofeach of its arguments,
+on e perline.
+Exercis e 1.3: Experiment tomeasure the dif ference in runningtimebet weenour pot ent ial ly
+inefficientversions and the one thatuses strings.Join.(Section1.6 illustrates par t of the
+time package, and Sec tion 11.4 shows how towrite benchmark tests for systematicperformance evaluation.)
+1.3. Finding DuplicateLines
+Prog ramsfor file copy ing , pr int ing , searching, sor ting, count ing , andthe likeall haveasimi lar
+st ruc ture: a loop overthe inp ut, som e comp utation on eachelement, andgenerat ion of out put
+on the fly or at the end.We’ll showthree var iants ofaprogram cal le d dup; it is par tly ins pired
+by the Unix uniq command, whichlooks for adj acentdup lic atelines. Thestr uctures and
+packages usedare model s that can beeasi lyadapt ed.
+The firs t versionof dup pr intseachlinethatapp earsmorethanonce in the stand ard inp ut,
+preceded byits count. Thisprogram introduces the if st atement,the map data typ e,and the
+bufio package.
+gopl.io/ch1/dup1
+// Dup1 prints the text of each line that appears more than
+// once in the standard input, preceded by its count.
+package main
+import (
+"bufio"
+"fmt"
+"os"
+)
+
+SECTION 1.3. FINDING DUPLICATE LINES 9
+func main() {
+counts := make(map[string]int)
+input := bufio.NewScanner(os.Stdin)
+for input.Scan() {
+counts[input.Text()]++
+}
+// NOTE: ignoring potential errors from input.Err()
+for line, n := range counts {
+if n > 1 {
+fmt.Printf("%d\t%s\n", n, line)
+}
+}
+}
+As wit h for,parenthes es arenever usedaro und the con dit ion inan if st atement,but braces
+arerequired for the body. There can be an opt ion al else part that is exe cut edifthe con dit ion
+is false.
+A map holdsaset ofkey/value pairsand provides cons tant-t imeoperat ions tostore , retr ieve,
+or testfor anitem in the set. Thekey may be of any typ e whos e values can comp are d with ==,
+st rings beingthe most commonexample; the value may be of any typ e at all. Inthisexample,
+thekeysare str ingsand the values are ints. Thebui lt-in function make createsanew emp ty
+map; ithas other usestoo.Maps aredis cussed at lengt h in Sec tion 4.3.
+Each time dup re ads a line of inp ut, the line is used as a key int o themap andthe corresp ondingvalue isincrement ed. The statement counts[input.Text()]++ is equivalentto
+thes e twostatements:
+line := input.Text()
+counts[line] = counts[line] + 1
+It’snot a pro blem if the map doesn’tyet cont ain thatkey.The firs t time a newline is seen, the
+expression counts[line] on the rig ht-handside evaluates to the zerovalue for itstyp e,which
+is 0 for int.
+To print the results, weuse another range-b ased for lo op, thistimeoverthe counts map. As
+before , each iterat ionpro duces two results, a key and the value ofthe map elementfor that
+ke y.The order ofmap iterat ion is not specified,but inprac tice it is random, varying fro m on e
+run to another.Thisdesig n is int ent ion al, since itpre vents programsfro m re lying onany particularorder ingwhere non e is guarante e d.
+Onward to the bufio package, whichhelps makeinp utand out put efficientand convenient.
+One of its mostusefulfeatures is a typ e called Scanner that reads inp utand bre aks itint o lines
+or words;it’soften the easiestway topro cessinp utthatcom esnatural ly in lines.
+Theprogram usesashort var iable decl arat ion to cre ate a new var iable input that refers to a
+bufio.Scanner:
+input := bufio.NewScanner(os.Stdin)
+
+10 CHAPTER 1. TUTORIAL
+Thescanner reads fro m theprogram’sstand ard inp ut. Eachcal l to input.Scan() re ads the
+next lineand remov esthe newlinecharac ter fro m theend;the resultcan beret rie ved bycal ling input.Text().The Scan func tionretur ns true if there isalineand false when there is
+no more inp ut.
+Thefunction fmt.Printf,like printf in C andother langu ages, pro duces for matte d output
+from a list of expressions.Its firs t argument is a for mat str ing thatspecifies how subsequent
+arguments should be for matte d. Thefor mat ofeachargument is deter mined byaconversion
+ch arac ter,aletterfol low ing a percentsig n. Fo r example, %d formats an integeroperandusing
+de cimal not ation,and %s exp ands tothe value ofastr ing operand.
+Printf hasoveradozen suchconversions,which Go programmerscal l verb s.Thistable isfar
+from a completespecification but illustrates many of the featuresthatare avai lable:
+%d de cimal integer
+%x, %o, %b integer in hexade cimal,octal,binar y
+%f, %g, %e floating-p ointnumber: 3.141593 3.141592653589793 3.141593e+00
+%t boole an: true or false
+%c rune (Unico de co de point)
+%s st ring
+%q quot edstr ing "abc" or rune 'c'
+%v anyvalue in a natural for mat
+%T type ofany value
+%% literal percentsig n (nooperand)
+Thefor mat str ing in dup1 also containsa tab \t andanewline \n.Str ing lit eralsmay cont ain
+such es cap e sequ ences forrepresent ing other wis e invisiblecharac ters. Printf do es notwrite a
+ne wline by defau lt. Byconvent ion,for matting functions whose names endin f,suchas
+log.Printf and fmt.Errorf,use the for matting rules of fmt.Printf,where asthose whose
+namesend in ln fo llow Println,for matting their arguments as if by %v,fol low ed by a
+ne wline.
+Many programsreadeit her fro m their stand ard inp ut, as abov e, or fro m asequence ofnamed
+files. Thenext versionof dup canreadfro m thestand ard inp ut or handlealistof file names,
+using os.Open to openeachone:
+gopl.io/ch1/dup2
+// Dup2 prints the count and text of lines that appear more than once
+// in the input. It reads from stdin or from a list of named files.
+package main
+import (
+"bufio"
+"fmt"
+"os"
+)
+
+SECTION 1.3. FINDING DUPLICATE LINES 11
+func main() {
+counts := make(map[string]int)
+files := os.Args[1:]
+if len(files) == 0 {
+countLines(os.Stdin, counts)
+}else {
+for _, arg := range files {
+f, err := os.Open(arg)
+if err != nil {
+fmt.Fprintf(os.Stderr, "dup2: %v\n", err)
+continue
+}
+countLines(f, counts)
+f.Close()
+}
+}
+for line, n := range counts {
+if n > 1 {
+fmt.Printf("%d\t%s\n", n, line)
+}
+}
+}
+func countLines(f *os.File, counts map[string]int) {
+input := bufio.NewScanner(f)
+for input.Scan() {
+counts[input.Text()]++
+}
+// NOTE: ignoring potential errors from input.Err()
+}
+Thefunction os.Open returnstwo values. The firs t is anopen file (*os.File)that is usedin
+su bsequentreads bythe Scanner.
+Thesecon d resu ltof os.Open is a value ofthe bui lt-in error type.If err equals the speci al
+built-in value nil,the file was opene d successf ully. The file isread, and whenthe end ofthe
+input is reach ed, Close clos es the file andreleasesany res ources. On theother hand, if err is
+not nil,som ethingwentwro ng. Inthatcas e,the error value descr ibesthe pro blem. Our simple-minde d er ror handlingprintsamessage onthe stand ard error streamusing Fprintf and
+theverb %v,whichdispl ays a value ofany typ e in a default for mat, and dup then car r ies on
+with thenext file; the continue st atement goes to the next iterat ion of the enclosing for lo op.
+In the int erests of keeping codesamples toareasonablesize,our early examples areint ent ional lysom ewhat cavalier abouterror handling. Cle arly wemustche ckfor anerror fro m
+os.Open;how ever, weare ignor ing the lesslikelypossibi lit y that an erro r couldocc ur while
+re adingthe file wit h input.Scan.Wewill not e pl aces where we’ve skipp ederror che cking ,
+and we will goint o thedet ails oferror handling in Sec tion 5.4.
+No tice thatthe cal l to countLines precedes its decl arat ion. Functions and other package-le vel
+entities may bedeclare d in anyorder.
+
+12 CHAPTER 1. TUTORIAL
+Amap isa reference to the dat a st ruc turecre ate d by make.Whenamap ispassedtoafunction,the functionreceivesa copy of the reference, so any changesthe cal le d func tionmakes to
+theunderly ing dat a st ruc turewill bevisible through the cal ler’smap reference too.Inour
+example, the values inserted int o the counts mapby countLines areseenby main.
+Theversions of dup ab ove operate in a ‘‘st reaming’’ mo de in whichinp ut is readand bro ken
+into lines as needed, so in princip lethese programscan handle an arbit rar y amount ofinp ut.
+An alt ernat ive appro ach is to readthe ent ire inp utint o memory inone big gulp,split it int o
+lines all at once, thenpro cessthe lines. Thefol low ing version, dup3,operates in thatfashion.
+It int roduces the function ReadFile (f rom the io/ioutil package), whichreads the ent ire
+cont ents of a name d file,and strings.Split,whichsplitsastr ing int o aslice ofsubst rings.
+(Split is the opp osite of strings.Join,which we saw earlier.)
+We’ve simplified dup3 some what. First, it onlyreads name d files, not the stand ard inp ut, since
+ReadFile re quires a file nameargument. Secon d, we mov edthe count ing ofthe lines back
+into main,since it is now needed inonlyone place.
+gopl.io/ch1/dup3
+package main
+import (
+"fmt"
+"io/ioutil"
+"os"
+"strings"
+)
+func main() {
+counts := make(map[string]int)
+for _, filename := range os.Args[1:] {
+data, err := ioutil.ReadFile(filename)
+if err != nil {
+fmt.Fprintf(os.Stderr, "dup3: %v\n", err)
+continue
+}
+for _, line := range strings.Split(string(data), "\n") {
+counts[line]++
+}
+}
+for line, n := range counts {
+if n > 1 {
+fmt.Printf("%d\t%s\n", n, line)
+}
+}
+}
+ReadFile returnsabyteslice thatmust be converted int o a string so itcan besplit by
+strings.Split.Wewill dis cussstr ingsand byteslices at lengt h in Sec tion 3.5.4.

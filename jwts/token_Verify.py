@@ -9,10 +9,9 @@ from databaseModel.userModel import User
 from databaseCon import get_db
 load_dotenv()
 
-SECRET_KEY = os.getenv(
-    "SECRET_KEY",
-    "fallback-secret-key-change-me"
-)
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY environment variable is missing!")
 
 ALGORITHM = os.getenv(
     "ALGORITHM",
@@ -38,7 +37,7 @@ def verify_token(token=str,db:Session=Depends(get_db)):
     
             user_email: str | None = payload.get("sub")
     
-            token_type: str | None = payload.get("type")
+            token_type: str | None = payload.get("scope")
     
             # ----------------------------------------------------
             # Missing email

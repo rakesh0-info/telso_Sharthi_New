@@ -49,7 +49,7 @@ from util_validate.util_file_security import save_upload_file, remove_file
 router = APIRouter(prefix="/api/common", tags=["Common to Admin, school admin, and content Admin"])
 logger = logging.getLogger(__name__)
 
-GEMINI_MODEL = "gemini-3.5-flash"
+GEMINI_MODEL = "gemini-3.5-flash-lite"
 GEMINI_URL = (
     "https://generativelanguage.googleapis.com/v1beta/"
     f"models/{GEMINI_MODEL}:generateContent"
