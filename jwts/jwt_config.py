@@ -16,13 +16,40 @@ REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", 7))
 
 def create_access_token(data: dict) -> str:
     to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire, "type": "access"})
+    ex=to_encode.get("expires_delta")
+
+    expire_delta = to_encode.pop("expires_delta", None)
+        
+        # Extract scope if provided, otherwise default to a standard access scope or None
+    scope = to_encode.pop("scope", "access")
+        
+    if expire_delta is not None:
+            expire = datetime.now(timezone.utc) + expire_delta
+    else:
+            expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+            
+    to_encode.update({
+            "exp": expire, 
+            "type": "access",
+            "scope": scope
+        })
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
 def create_refresh_token(data: dict) -> str:
     to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
-    to_encode.update({"exp": expire, "type": "refresh"})
+    
+    expire_delta = to_encode.pop("expires_delta", None)
+    scope = to_encode.pop("scope", "refresh")
+    
+    if expire_delta is not None:
+        expire = datetime.now(timezone.utc) + expire_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+        
+    to_encode.update({
+        "exp": expire, 
+        "type": "refresh",
+        "scope": scope
+    })
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)

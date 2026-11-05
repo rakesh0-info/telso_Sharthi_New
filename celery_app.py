@@ -11,7 +11,7 @@ load_dotenv()
 
 
 broker_url = (
-    os.getenv("CELERY_BROKER_URL")
+    os.getenv("REDIS_URL")
     
 )
 

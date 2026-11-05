@@ -1,16 +1,29 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from io import BytesIO
+from math import isfinite
+import re
+from tempfile import SpooledTemporaryFile
 from typing import Optional
 import secrets
 import string
+from zipfile import BadZipFile, LargeZipFile, ZipFile
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi.responses import StreamingResponse
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font
+from openpyxl.utils.exceptions import InvalidFileException
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
+from pydantic import ValidationError
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
+from xml.etree.ElementTree import ParseError
 
+from util_validate.background import send_welcome_emails_background
+from mail.sendmail import send_school_admin_welcome_email, send_teacher_welcome_email
 from databaseCon import get_db
 from databaseModel.userModel import User
 from databaseModel.schoolModel import School
@@ -28,6 +41,26 @@ from jwts.DB_Security_Config import require_roles
 
 router = APIRouter(prefix="/api/super-admin", tags=["Super Admin Management"])
 verify_super_admin = Depends(require_roles(RoleEnum.SUPER_ADMIN))
+
+TEACHER_IMPORT_MAX_BYTES = 5 * 1024 * 1024
+TEACHER_IMPORT_MAX_UNCOMPRESSED_BYTES = 20 * 1024 * 1024
+TEACHER_IMPORT_MAX_ROWS = 500
+TEACHER_IMPORT_MAX_ZIP_MEMBERS = 1000
+TEACHER_IMPORT_HEADERS = {
+    "name",
+    "email",
+    "password",
+    "school_id",
+    "phone_number",
+    "gender",
+    "qualification",
+    "class_ids",
+    "section_ids",
+    "subject_ids",
+    "activation_status",
+}
+TEACHER_IMPORT_REQUIRED_HEADERS = {"name", "email", "password", "school_id"}
+XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 # ---------------------------------------------------------------------------
@@ -446,6 +479,72 @@ class TeacherCreate(RequestModel):
         return _validate_positive_ids(value)
 
 
+def _spreadsheet_integer(value, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a positive whole number.")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and isfinite(value) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and re.fullmatch(r"\d+", value.strip()):
+        return int(value.strip())
+    raise ValueError(f"{field_name} must be a positive whole number.")
+
+
+def _spreadsheet_id_list(value, field_name: str) -> list[int]:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return []
+    if isinstance(value, str):
+        parts = value.split(",")
+        if any(not part.strip() for part in parts):
+            raise ValueError(f"{field_name} must be comma-separated positive whole numbers.")
+        return [_spreadsheet_integer(part.strip(), field_name) for part in parts]
+    return [_spreadsheet_integer(value, field_name)]
+
+
+def _teacher_import_payload(values: dict[str, object]) -> dict[str, object]:
+    payload = dict(values)
+    payload["school_id"] = _spreadsheet_integer(payload.get("school_id"), "school_id")
+    for field_name in ("class_ids", "section_ids", "subject_ids"):
+        if field_name in payload:
+            payload[field_name] = _spreadsheet_id_list(payload[field_name], field_name)
+    for field_name in ("password", "phone_number"):
+        value = payload.get(field_name)
+        if isinstance(value, int) and not isinstance(value, bool):
+            payload[field_name] = str(value)
+        elif isinstance(value, float) and isfinite(value) and value.is_integer():
+            payload[field_name] = str(int(value))
+    for field_name in ("gender", "activation_status"):
+        value = payload.get(field_name)
+        if isinstance(value, str):
+            payload[field_name] = value.strip().lower() or None
+    return payload
+
+
+def _teacher_import_validation_errors(exc: ValidationError) -> list[dict[str, str]]:
+    return [
+        {
+            "field": str(error["loc"][0]) if error["loc"] else "row",
+            "message": error["msg"],
+        }
+        for error in exc.errors(include_input=False)
+    ]
+
+
+def _excel_safe_text(value: Optional[str]) -> Optional[str]:
+    if value is not None and value.lstrip().startswith(("=", "+", "-", "@")):
+        return "'" + value
+    return value
+
+
+def _stream_spooled_file(file_obj, chunk_size: int = 64 * 1024):
+    try:
+        while chunk := file_obj.read(chunk_size):
+            yield chunk
+    finally:
+        file_obj.close()
+
+
 class TeacherUpdate(RequestModel):
     name: Optional[str] = Field(default=None, min_length=2, max_length=255)
     email: Optional[EmailStr] = None
@@ -702,7 +801,7 @@ class ClassroomOperatorAssignmentUpdate(RequestModel):
 # ---------------------------------------------------------------------------
 
 @router.post("/schools", status_code=status.HTTP_201_CREATED, dependencies=[verify_super_admin])
-def add_school(data: SchoolCreate, db: Session = Depends(get_db)):
+async def add_school(data: SchoolCreate, db: Session = Depends(get_db),bg=BackgroundTasks):
     if db.query(School).filter(School.school_code == data.school_code).first():
         raise HTTPException(status_code=409, detail="School code already exists.")
     admins = _get_school_admins(db, data.school_admin_ids)
@@ -726,6 +825,8 @@ def add_school(data: SchoolCreate, db: Session = Depends(get_db)):
             school_classes.insert(),
             [{"school_id": school.id, "class_id": class_obj.id} for class_obj in classes],
         )
+        
+        
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(
@@ -734,6 +835,22 @@ def add_school(data: SchoolCreate, db: Session = Depends(get_db)):
         ) from exc
     _commit(db, "School code or school-admin assignment conflicts with existing data.")
     db.refresh(school)
+
+    admin_data = [
+      {"email": admin.email, "name": getattr(admin, "name", "Admin")}
+      for admin in admins
+    ]
+    school_data = {
+      "name": school.name,
+      "school_code": school.school_code,
+      "state": school.state,
+      "distc": school.distc,
+      "region": school.region,
+      "school_ph_no": school.school_ph_no,
+      "address": school.address,
+  }
+
+    bg.add_task(send_welcome_emails_background, admin_data, school_data)
     return {"message": "School created successfully.", "school_id": school.id,
             "assigned_admin_ids": [admin.id for admin in school.school_admins],
             "assigned_classes": _format_school_classes(classes)}
@@ -808,7 +925,7 @@ def edit_school(school_id: int, data: SchoolUpdate, db: Session = Depends(get_db
 
 
 @router.put("/schools/{school_id}/assign-admins", dependencies=[verify_super_admin])
-def assign_school_admins(school_id: int, data: SchoolAssignmentUpdate, db: Session = Depends(get_db)):
+async def assign_school_admins(school_id: int, data: SchoolAssignmentUpdate,background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     school = db.query(School).options(selectinload(School.school_admins)).filter(
         School.id == school_id
     ).first()
@@ -818,6 +935,22 @@ def assign_school_admins(school_id: int, data: SchoolAssignmentUpdate, db: Sessi
     admins = _get_school_admins(db, data.admin_ids)
     school.school_admins = admins  # Replaces the complete assignment list.
     _commit(db, "School-admin assignment could not be saved.")
+    admin_data = [
+      {"email": admin.email, "name": getattr(admin, "name", "Admin")}
+      for admin in admins
+  ]
+    school_data = {
+      "name": school.name,
+      "school_code": school.school_code,
+      "state": school.state,
+      "distc": school.distc,
+      "region": school.region,
+      "school_ph_no": school.school_ph_no,
+      "address": school.address,
+    }
+    background_tasks.add_task(
+      send_welcome_emails_background, admin_data, school_data
+  )
     return {
         "message": "School-admin assignments updated successfully.",
         "school_id": school.id,
@@ -864,7 +997,18 @@ def add_school_admin(data: SchoolAdminCreate, db: Session = Depends(get_db)):
     )
     db.add(admin)
     _commit(db, "Email already registered.")
+    
     db.refresh(admin)
+
+    try:
+        send_teacher_welcome_email(
+            to_email=admin.email,
+            teacher_name=admin.name,
+            temp_password=temporary_password
+        )
+    except Exception:
+        pass
+
     return {
         "message": "School Admin user created successfully. Save the temporary password now; it will not be shown again.",
         "admin_id": admin.id,
@@ -1412,6 +1556,15 @@ def add_teacher(data: TeacherCreate, db: Session = Depends(get_db)):
     )
     _commit(db, "Teacher email or assignment conflicts with existing data.")
     db.refresh(teacher)
+    try:
+                send_teacher_welcome_email(
+                    to_email=user.email,
+                    teacher_name=user.name,
+                    password=data.password,
+                    school_obj=school
+                )
+    except Exception:
+                pass 
     return {"message": "Teacher created successfully.", "teacher_id": teacher.id, "user_id": user.id}
 
 
@@ -1487,6 +1640,332 @@ def get_teachers(
             else (teacher.user.activation_status if teacher.user else None)
         ),
     } for teacher in teachers]
+
+
+@router.get("/teachers/template", dependencies=[verify_super_admin])
+def download_teacher_template():
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Teachers"
+    headers = [
+        "name",
+        "email",
+        "password",
+        "school_id",
+        "phone_number",
+        "gender",
+        "qualification",
+        "class_ids",
+        "section_ids",
+        "subject_ids",
+        "activation_status",
+    ]
+    worksheet.append(headers)
+    worksheet.freeze_panes = "A2"
+    worksheet.auto_filter.ref = f"A1:{chr(64 + len(headers))}1"
+    for cell in worksheet[1]:
+        cell.font = Font(bold=True)
+    for index, header in enumerate(headers, start=1):
+        worksheet.column_dimensions[chr(64 + index)].width = max(16, len(header) + 2)
+
+    instructions = workbook.create_sheet("Instructions")
+    instruction_rows = [
+        ("Required columns", "name, email, password, school_id"),
+        ("Password", "Must be 8-128 characters; it is stored as a hash and is not included in exports."),
+        ("Phone number", "Optional; when provided, enter exactly 10 digits."),
+        ("Gender", "Optional; allowed values: male, female, other."),
+        ("Qualification", "Optional; maximum 255 characters."),
+        ("class_ids", "Optional comma-separated class IDs, for example: 1, 2."),
+        ("section_ids", "Optional comma-separated section IDs; each section must belong to an assigned class."),
+        ("subject_ids", "Optional comma-separated subject IDs; each subject must be assigned to an assigned class."),
+        ("activation_status", "Optional; allowed values: active, inactive, suspended. Defaults to active."),
+        ("School and assignments", "School must exist and be active; assigned classes must belong to that school."),
+        ("Import behavior", "Valid rows are imported; invalid rows are reported without importing those rows. Maximum 500 rows."),
+        ("Headers", "Keep the first-row column headers unchanged. Additional columns are not accepted."),
+    ]
+    instructions.append(["Field", "Instructions"])
+    for row in instruction_rows:
+        instructions.append(row)
+    instructions.freeze_panes = "A2"
+    instructions.column_dimensions["A"].width = 28
+    instructions.column_dimensions["B"].width = 100
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type=XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": 'attachment; filename="teacher_template.xlsx"'},
+    )
+
+
+@router.post("/teachers/bulk-upload", dependencies=[verify_super_admin])
+def bulk_upload_teachers(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    if not file.filename or not file.filename.lower().endswith(".xlsx"):
+        raise HTTPException(status_code=415, detail="Upload an .xlsx Excel workbook.")
+
+    content = file.file.read(TEACHER_IMPORT_MAX_BYTES + 1)
+    if len(content) > TEACHER_IMPORT_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Excel workbook exceeds the 5 MB upload limit.")
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded workbook is empty.")
+
+    try:
+        with ZipFile(BytesIO(content)) as archive:
+            members = archive.infolist()
+            if len(members) > TEACHER_IMPORT_MAX_ZIP_MEMBERS:
+                raise HTTPException(status_code=413, detail="Excel workbook contains too many internal files.")
+            if sum(member.file_size for member in members) > TEACHER_IMPORT_MAX_UNCOMPRESSED_BYTES:
+                raise HTTPException(status_code=413, detail="Excel workbook expands beyond the allowed size.")
+    except (BadZipFile, LargeZipFile) as exc:
+        raise HTTPException(status_code=400, detail="Uploaded file is not a valid .xlsx workbook.") from exc
+
+    workbook = None
+    try:
+        workbook = load_workbook(BytesIO(content), read_only=True, data_only=False)
+        worksheet = workbook.active
+        if worksheet.max_row is None or worksheet.max_row < 1:
+            raise HTTPException(status_code=422, detail="Workbook must contain a header row.")
+        if worksheet.max_row > TEACHER_IMPORT_MAX_ROWS + 1:
+            raise HTTPException(status_code=413, detail="Workbook may contain at most 500 teacher rows.")
+        if not worksheet.max_column or worksheet.max_column > len(TEACHER_IMPORT_HEADERS):
+            raise HTTPException(status_code=422, detail="Workbook has an invalid number of columns.")
+
+        header_cells = next(worksheet.iter_rows(min_row=1, max_row=1), ())
+        if any(cell.data_type == "f" for cell in header_cells):
+            raise HTTPException(status_code=422, detail="Column headers cannot contain formulas.")
+        headers = []
+        for cell in header_cells:
+            if not isinstance(cell.value, str) or not cell.value.strip():
+                raise HTTPException(status_code=422, detail="Every populated column must have a header.")
+            headers.append(cell.value.strip().lower())
+        if len(headers) != len(set(headers)):
+            raise HTTPException(status_code=422, detail="Duplicate column headers are not allowed.")
+        unknown_headers = sorted(set(headers) - TEACHER_IMPORT_HEADERS)
+        missing_headers = sorted(TEACHER_IMPORT_REQUIRED_HEADERS - set(headers))
+        if unknown_headers or missing_headers:
+            details = []
+            if missing_headers:
+                details.append(f"Missing required headers: {', '.join(missing_headers)}.")
+            if unknown_headers:
+                details.append(f"Unsupported headers: {', '.join(unknown_headers)}.")
+            raise HTTPException(status_code=422, detail=" ".join(details))
+        header_indexes = {header: index for index, header in enumerate(headers)}
+
+        parsed_rows = []
+        row_errors = []
+        for row_number, cells in enumerate(
+            worksheet.iter_rows(min_row=2, max_row=TEACHER_IMPORT_MAX_ROWS + 1),
+            start=2,
+        ):
+            if all(cell.value is None or (isinstance(cell.value, str) and not cell.value.strip()) for cell in cells):
+                continue
+            if any(cell.data_type == "f" for cell in cells):
+                row_errors.append({
+                    "row": row_number,
+                    "errors": [{"field": "row", "message": "Formula cells are not allowed."}],
+                })
+                continue
+            values = {
+                header: cells[index].value if index < len(cells) else None
+                for header, index in header_indexes.items()
+            }
+            try:
+                teacher_data = TeacherCreate.model_validate(_teacher_import_payload(values))
+            except (ValidationError, ValueError) as exc:
+                errors = (
+                    _teacher_import_validation_errors(exc)
+                    if isinstance(exc, ValidationError)
+                    else [{"field": "row", "message": str(exc)}]
+                )
+                row_errors.append({"row": row_number, "errors": errors})
+                continue
+            parsed_rows.append((row_number, teacher_data))
+    except HTTPException:
+        raise
+    except (BadZipFile, EOFError, InvalidFileException, KeyError, OSError, ParseError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Unable to read the uploaded Excel workbook.") from exc
+    finally:
+        if workbook is not None:
+            workbook.close()
+
+    if not parsed_rows and not row_errors:
+        raise HTTPException(status_code=422, detail="Workbook contains no teacher rows.")
+
+    email_counts: dict[str, int] = {}
+    for _, teacher_data in parsed_rows:
+        email_counts[teacher_data.email] = email_counts.get(teacher_data.email, 0) + 1
+    duplicate_file_emails = {email for email, count in email_counts.items() if count > 1}
+    for row_number, teacher_data in parsed_rows:
+        if teacher_data.email in duplicate_file_emails:
+            row_errors.append({
+                "row": row_number,
+                "errors": [{"field": "email", "message": "Email appears more than once in this workbook."}],
+            })
+
+    unique_emails = {teacher_data.email for _, teacher_data in parsed_rows}
+    existing_emails = set()
+    if unique_emails:
+        existing_emails = {
+            row[0].lower()
+            for row in db.query(User.email).filter(func.lower(User.email).in_(unique_emails)).all()
+        }
+
+    school_ids = {teacher_data.school_id for _, teacher_data in parsed_rows}
+    schools = {
+        school.id: school
+        for school in db.query(School).filter(School.id.in_(school_ids)).all()
+    } if school_ids else {}
+
+    valid_rows = []
+    for row_number, teacher_data in parsed_rows:
+        row_error = None
+        if teacher_data.email in duplicate_file_emails:
+            continue
+        if teacher_data.email in existing_emails:
+            row_error = ("email", "Email already registered.")
+        school = schools.get(teacher_data.school_id)
+        if row_error is None and school is None:
+            row_error = ("school_id", f"School {teacher_data.school_id} not found.")
+        if row_error is None:
+            try:
+                _verify_school_active(school)
+                classes = _require_school_classes(db, school.id, teacher_data.class_ids)
+                sections = _validate_teacher_sections(db, teacher_data.class_ids, teacher_data.section_ids)
+                subjects = _validate_teacher_subjects(db, teacher_data.class_ids, teacher_data.subject_ids)
+            except HTTPException as exc:
+                row_error = ("assignments", str(exc.detail))
+        if row_error:
+            row_errors.append({
+                "row": row_number,
+                "errors": [{"field": row_error[0], "message": row_error[1]}],
+            })
+        else:
+            valid_rows.append((row_number, teacher_data, school, classes, sections, subjects))
+
+    imported_teacher_ids = []
+    imported_user_ids = []
+    for row_number, teacher_data, school, classes, sections, subjects in valid_rows:
+        try:
+            with db.begin_nested():
+                user = User(
+                    name=teacher_data.name,
+                    email=teacher_data.email,
+                    password=hash_password(teacher_data.password),
+                    phone_number=teacher_data.phone_number,
+                    gender=teacher_data.gender,
+                    role=RoleEnum.TEACHER,
+                    activation_status=teacher_data.activation_status,
+                )
+                teacher = Teacher(school_id=school.id, qualification=teacher_data.qualification)
+                teacher.classes = classes
+                teacher.sections = sections
+                teacher.subjects = subjects
+                user.teacher_profile = teacher
+                db.add(user)
+                school.total_teacher += 1
+                db.flush()
+                teacher_id = teacher.id
+                user_id = user.id
+            imported_teacher_ids.append(teacher_id)
+            imported_user_ids.append(user_id)
+        except IntegrityError:
+            row_errors.append({
+                "row": row_number,
+                "errors": [{"field": "email", "message": "Row conflicts with existing account or assignment data."}],
+            })
+
+    if imported_teacher_ids:
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="Teacher import could not be committed because account or assignment data changed during import.",
+            ) from exc
+    else:
+        db.rollback()
+
+    return {
+        "message": "Teacher import completed.",
+        "imported_count": len(imported_teacher_ids),
+        "teacher_ids": imported_teacher_ids,
+        "user_ids": imported_user_ids,
+        "failed_count": len(row_errors),
+        "row_errors": sorted(row_errors, key=lambda error: error["row"]),
+    }
+
+
+@router.get("/teachers/export", dependencies=[verify_super_admin])
+def export_teachers(
+    school_id: Optional[int] = Query(default=None, gt=0),
+    db: Session = Depends(get_db),
+):
+    query = db.query(Teacher).options(
+        selectinload(Teacher.user),
+        selectinload(Teacher.school),
+        selectinload(Teacher.classes),
+        selectinload(Teacher.sections).selectinload(ClassSection.class_obj),
+        selectinload(Teacher.subjects),
+    )
+    if school_id is not None:
+        query = query.filter(Teacher.school_id == school_id)
+
+    workbook = Workbook(write_only=True)
+    worksheet = workbook.create_sheet("Teachers")
+    worksheet.append([
+        "teacher_id",
+        "user_id",
+        "name",
+        "email",
+        "phone_number",
+        "gender",
+        "school_id",
+        "school_name",
+        "qualification",
+        "activation_status",
+        "assigned_classes",
+        "assigned_sections",
+        "assigned_subjects",
+    ])
+    for teacher in query.order_by(Teacher.id).yield_per(200):
+        user = teacher.user
+        worksheet.append([
+            teacher.id,
+            user.id if user else None,
+            _excel_safe_text(user.name if user else None),
+            _excel_safe_text(user.email if user else None),
+            _excel_safe_text(user.phone_number if user else None),
+            user.gender.value if user and user.gender else None,
+            teacher.school_id,
+            _excel_safe_text(teacher.school.name if teacher.school else None),
+            _excel_safe_text(teacher.qualification),
+            user.activation_status.value if user and user.activation_status else None,
+            _excel_safe_text(", ".join(class_obj.class_name for class_obj in teacher.classes)),
+            _excel_safe_text(", ".join(
+                f"{section.class_obj.class_name} - {section.section_name}"
+                if section.class_obj else section.section_name
+                for section in teacher.sections
+            )),
+            _excel_safe_text(", ".join(subject.name for subject in teacher.subjects)),
+        ])
+
+    output = SpooledTemporaryFile(max_size=10 * 1024 * 1024, mode="w+b")
+    try:
+        workbook.save(output)
+        output.seek(0)
+    except (OSError, TypeError, ValueError) as exc:
+        output.close()
+        raise HTTPException(status_code=500, detail="Unable to generate the teacher export workbook.") from exc
+    finally:
+        workbook.close()
+    return StreamingResponse(
+        _stream_spooled_file(output),
+        media_type=XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": 'attachment; filename="teachers.xlsx"'},
+    )
 
 
 @router.put("/teachers/{teacher_id}", dependencies=[verify_super_admin])

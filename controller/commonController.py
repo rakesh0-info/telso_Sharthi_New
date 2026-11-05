@@ -762,6 +762,17 @@ def create_educational_content(
     if not db.query(Subject.id).filter(Subject.id == subject_id).first():
         raise HTTPException(status_code=404, detail="Subject not found.")
 
+    if current_user.role.value == RoleEnum.SCHOOL_ADMIN.value:
+        school_assignment = db.query(school_admin_assignments.c.school_id).filter(
+            school_admin_assignments.c.school_id == school_id,
+            school_admin_assignments.c.admin_id == current_user.id,
+        ).first()
+        if not school_assignment:
+            raise HTTPException(
+                status_code=403,
+                detail="You are not assigned to the selected school."
+            )
+
     if chapter_id is not None:
         chapter = db.query(Chapter).filter(Chapter.id == chapter_id, Chapter.subject_id == subject_id).first()
         if not chapter:
@@ -831,6 +842,7 @@ def get_contents(
         selectinload(Content.topic),
     )
 
+
     if school_id:
         query = query.filter(Content.school_id == school_id)
     if class_id:
@@ -865,6 +877,20 @@ def delete_content(content_id: int, db: Session = Depends(get_db)):
     content = db.query(Content).filter(Content.id == content_id).first()
     if not content:
         raise HTTPException(status_code=404, detail="Content record not found.")
+
+    id=content.uploaded_by
+    user=db.query(User).filter(User.id==id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="Uploader user not found.")
+
+    if user.role.value==RoleEnum.SCHOOL_ADMIN.value:
+        school=db.query(School).filter(School.id==user.id).first()
+
+        if school.id!=content.school_id:
+            raise HTTPException(status_code=403, detail="You are not authorized to delete this content.")
+        if school is None:
+            raise HTTPException(status_code=404, detail="Uploader's school not found.")
+        _verify_school_active(school)
 
     # Remove physical files from storage server to prevent orphaned file accumulation
     remove_file(content.english_file_url)

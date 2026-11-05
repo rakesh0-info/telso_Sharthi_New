@@ -228,6 +228,9 @@ def student_login(request: Request,data: StudentLoginRequest, db: Session = Depe
         if status_val != ActivationStatus.ACTIVE.value and status_val != ActivationStatus.ACTIVE:
             raise HTTPException(status_code=403, detail="Associated school account is inactive.")
 
+    # Otp send in student email
+    # verify otp
+
     token = _create_student_token(student.id, student.school_id)
     return {
         "message": "Login successful.",
