@@ -34,6 +34,7 @@ from controller.StudentController import router as student
 from controller.commonController import router as common
 from controller.TeacherAdminController import router as teacher_admin
 from controller.TeacherAdminController import teacher_router as teacher_management
+from controller.ClassroomOperatorController import router as classroom_operator
 
 
 
@@ -64,3 +65,4 @@ app.include_router(student)
 app.include_router(common)
 app.include_router(teacher_admin)
 app.include_router(teacher_management)
+app.include_router(classroom_operator)

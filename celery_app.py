@@ -2,14 +2,17 @@ import os
 
 from celery import Celery
 from dotenv import load_dotenv
+from redis import Redis
 
 
 load_dotenv()
 
+
+
+
 broker_url = (
     os.getenv("CELERY_BROKER_URL")
-    or os.getenv("REDIS_URL")
-    or "redis://localhost:6379/0"
+    
 )
 
 celery_app = Celery(

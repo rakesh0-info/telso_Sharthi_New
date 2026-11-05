@@ -66,6 +66,12 @@ from util_validate.internal_exam_scoring import (
     is_supported_exam_question_type,
 )
 
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+
+limiter = Limiter(key_func=get_remote_address)
+
 router = APIRouter(prefix="/api/student", tags=["Student Portal"])
 security = HTTPBearer()
 logger = logging.getLogger(__name__)
@@ -195,7 +201,7 @@ def get_current_student(credentials: HTTPAuthorizationCredentials = Depends(secu
 
 @router.post("/login", status_code=status.HTTP_200_OK)
 @limiter.limit("3/minute")
-def student_login(data: StudentLoginRequest, db: Session = Depends(get_db)):
+def student_login(request: Request,data: StudentLoginRequest, db: Session = Depends(get_db)):
     query = db.query(Student).filter(Student.parents_ph_no == data.parents_ph_no,Student.email== data.student_email
                                      )
     
