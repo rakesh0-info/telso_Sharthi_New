@@ -1725,14 +1725,13 @@ def bulk_upload_teachers(file: UploadFile = File(...), db: Session = Depends(get
     try:
         workbook = load_workbook(BytesIO(content), read_only=True, data_only=False)
         worksheet = workbook.active
-        if worksheet.max_row is None or worksheet.max_row < 1:
+        header_rows = list(worksheet.iter_rows(min_row=1, max_row=1))
+        if not header_rows or not any(cell.value is not None for cell in header_rows[0]):
             raise HTTPException(status_code=422, detail="Workbook must contain a header row.")
-        if worksheet.max_row > TEACHER_IMPORT_MAX_ROWS + 1:
-            raise HTTPException(status_code=413, detail="Workbook may contain at most 500 teacher rows.")
-        if not worksheet.max_column or worksheet.max_column > len(TEACHER_IMPORT_HEADERS):
+        header_cells = header_rows[0]
+        
+        if len(header_cells) > len(TEACHER_IMPORT_HEADERS):
             raise HTTPException(status_code=422, detail="Workbook has an invalid number of columns.")
-
-        header_cells = next(worksheet.iter_rows(min_row=1, max_row=1), ())
         if any(cell.data_type == "f" for cell in header_cells):
             raise HTTPException(status_code=422, detail="Column headers cannot contain formulas.")
         headers = []
